@@ -166,7 +166,9 @@ void main() {
       expect(find.text('أحمد علي'), findsOneWidget);
 
       // Displays app settings
-      expect(find.textContaining('إعدادات الاتصال بالخادم'), findsOneWidget);
+      expect(find.textContaining('إعدادات الاتصال بالخادم'), findsNothing);
+      expect(find.textContaining('USB / Wi-Fi'), findsNothing);
+      expect(find.byIcon(Icons.router), findsNothing);
       expect(find.text('دليل الفترة التجريبية (Pilot)'), findsNothing);
 
       // Displays logout action

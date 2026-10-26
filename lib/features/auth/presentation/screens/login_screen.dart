@@ -1,12 +1,9 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:attend_mobile/core/api/api_client.dart';
 import 'package:attend_mobile/core/auth/token_storage.dart';
 import 'package:attend_mobile/core/design_system/app_strings_ar.dart';
 import 'package:attend_mobile/core/design_system/app_theme.dart';
 import 'package:attend_mobile/core/design_system/widgets/wolf_card.dart';
-import 'package:attend_mobile/core/network/server_connection_dialog.dart';
 import 'package:attend_mobile/features/auth/presentation/cubit/auth_cubit.dart';
 import 'package:attend_mobile/features/auth/presentation/cubit/auth_state.dart';
 import 'package:attend_mobile/features/auth/presentation/screens/password_recovery_screen.dart';
@@ -27,8 +24,6 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoadingRememberedCompany = true;
   bool _isChangingCompany = false;
   String? _localError;
-  int _devModeClicks = 0;
-  bool _devModeUnlocked = false;
 
   @override
   void initState() {
@@ -61,23 +56,6 @@ class _LoginScreenState extends State<LoginScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
-  }
-
-  void _onLogoTap() {
-    if (kReleaseMode) return;
-    setState(() {
-      _devModeClicks++;
-      if (_devModeClicks >= 5) {
-        _devModeUnlocked = true;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('تم تفعيل وضع إعدادات الخادم للمطورين'),
-            duration: Duration(seconds: 2),
-            backgroundColor: AppTheme.primaryColor,
-          ),
-        );
-      }
-    });
   }
 
   void _submit() {
@@ -114,36 +92,6 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  String _getServerHostName() {
-    try {
-      final uri = Uri.parse(context.read<ApiClient>().baseUrl);
-      return '${uri.host}:${uri.port}';
-    } catch (_) {
-      return 'localhost:3000';
-    }
-  }
-
-  void _openServerSettings() {
-    if (kReleaseMode) return;
-    try {
-      final apiClient = context.read<ApiClient>();
-      final tokenStorage = context.read<TokenStorage>();
-      ServerConnectionDialog.show(
-        context,
-        apiClient: apiClient,
-        tokenStorage: tokenStorage,
-        onSaved: () => setState(() {}),
-      );
-    } catch (_) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('تعذر فتح إعدادات الخادم في وضع الاختبار'),
-          backgroundColor: AppTheme.surface02,
-        ),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Directionality(
@@ -153,16 +101,6 @@ class _LoginScreenState extends State<LoginScreen> {
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
-          actions: [
-            if (!kReleaseMode && (kDebugMode || _devModeUnlocked))
-              IconButton(
-                key: const Key('server_settings_button'),
-                icon: const Icon(Icons.settings_ethernet,
-                    color: AppTheme.primaryColor),
-                tooltip: 'إعدادات الاتصال بالخادم',
-                onPressed: _openServerSettings,
-              ),
-          ],
         ),
         body: SafeArea(
           child: Center(
@@ -185,24 +123,21 @@ class _LoginScreenState extends State<LoginScreen> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           // Official Attend Logo
-                          GestureDetector(
-                            onTap: _onLogoTap,
-                            child: Image.asset(
-                              AppTheme.logoAsset,
-                              width: 88,
-                              height: 88,
-                              errorBuilder: (context, error, stackTrace) =>
-                                  Container(
-                                width: 80,
-                                height: 80,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: AppTheme.secondaryColor
-                                      .withValues(alpha: 0.3),
-                                ),
-                                child: const Icon(Icons.business,
-                                    size: 40, color: AppTheme.primaryColor),
+                          Image.asset(
+                            AppTheme.logoAsset,
+                            width: 88,
+                            height: 88,
+                            errorBuilder: (context, error, stackTrace) =>
+                                Container(
+                              width: 80,
+                              height: 80,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: AppTheme.secondaryColor
+                                    .withValues(alpha: 0.3),
                               ),
+                              child: const Icon(Icons.business,
+                                  size: 40, color: AppTheme.primaryColor),
                             ),
                           ),
                           const SizedBox(height: 16),
@@ -226,52 +161,6 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
                           const SizedBox(height: 12),
-
-                          // Server Connection Pill
-                          if (!kReleaseMode &&
-                              (kDebugMode || _devModeUnlocked)) ...[
-                            InkWell(
-                              onTap: _openServerSettings,
-                              borderRadius: BorderRadius.circular(20),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(20),
-                                  border:
-                                      Border.all(color: AppTheme.borderColor),
-                                  boxShadow: const [AppTheme.cardShadow],
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 8,
-                                      height: 8,
-                                      decoration: const BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: AppTheme.successColor,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      'الخادم: ${_getServerHostName()}',
-                                      style: const TextStyle(
-                                        color: AppTheme.textSecondary,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    const Icon(Icons.settings,
-                                        size: 14,
-                                        color: AppTheme.textSecondary),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                          ],
 
                           // Error Banner
                           if (_localError != null) ...[

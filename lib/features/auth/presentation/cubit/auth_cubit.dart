@@ -15,7 +15,7 @@ class AuthCubit extends Cubit<AuthState> {
 
   Future<void> checkSession() async {
     if (isClosed) return;
-    emit(const AuthLoading());
+    emit(const AuthRestoringSession());
     try {
       final session = await _authRepository.getCachedSession();
       if (isClosed) return;

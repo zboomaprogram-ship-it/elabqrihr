@@ -40,11 +40,11 @@ class AuthGate extends StatelessWidget {
         return true;
       },
       builder: (context, state) {
-        // Only the very first application frame uses the full-page loader.
+        // Keep session restoration on the branded loader until identity is known.
         // During an interactive sign-in, keeping LoginScreen mounted preserves
         // the company's code, email and password and lets its button show the
         // in-place progress indicator and any resulting error message.
-        if (state is AuthInitial) {
+        if (state is AuthInitial || state is AuthRestoringSession) {
           return Scaffold(
             backgroundColor: Colors.white,
             body: Center(

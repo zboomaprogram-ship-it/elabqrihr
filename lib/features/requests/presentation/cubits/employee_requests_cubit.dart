@@ -72,6 +72,7 @@ class EmployeeRequestsCubit extends Cubit<EmployeeRequestsState> {
   final RequestRepository _repository;
   final DynamicRequestRepository? _dynamicRepository;
   StreamSubscription<List<RequestEntity>>? _outboxSubscription;
+  int _pendingOutboxCount = 0;
 
   EmployeeRequestsCubit({
     required RequestRepository repository,
@@ -85,6 +86,7 @@ class EmployeeRequestsCubit extends Cubit<EmployeeRequestsState> {
   void _listenToOutbox() {
     _outboxSubscription = _repository.watchPendingRequests().listen((pending) {
       if (isClosed) return;
+      _pendingOutboxCount = pending.length;
       if (state is EmployeeRequestsLoaded) {
         final current = state as EmployeeRequestsLoaded;
         emit(current.copyWith(pendingOutboxCount: pending.length));
@@ -164,6 +166,7 @@ class EmployeeRequestsCubit extends Cubit<EmployeeRequestsState> {
       emit(EmployeeRequestsLoaded(
         requests: requests,
         balances: balances,
+        pendingOutboxCount: _pendingOutboxCount,
       ));
     } catch (e) {
       if (isClosed) return;

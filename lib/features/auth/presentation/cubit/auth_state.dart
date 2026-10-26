@@ -16,6 +16,11 @@ class AuthLoading extends AuthState {
   const AuthLoading();
 }
 
+/// Initial or background session restoration, distinct from interactive sign-in.
+class AuthRestoringSession extends AuthLoading {
+  const AuthRestoringSession();
+}
+
 class Authenticated extends AuthState {
   final AuthSessionEntity session;
 

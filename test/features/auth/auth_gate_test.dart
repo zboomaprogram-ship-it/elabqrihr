@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:attend_mobile/features/attendance/domain/attendance_models.dart';
@@ -12,10 +13,13 @@ import 'package:attend_mobile/main.dart';
 
 class _FakeAuthRepo implements AuthRepository {
   final AuthSessionEntity? session;
-  _FakeAuthRepo(this.session);
+  final Future<AuthSessionEntity?>? delayedSession;
+  final Future<AuthSessionEntity>? delayedRefresh;
+  _FakeAuthRepo(this.session, {this.delayedSession, this.delayedRefresh});
 
   @override
-  Future<AuthSessionEntity?> getCachedSession() async => session;
+  Future<AuthSessionEntity?> getCachedSession() async =>
+      delayedSession == null ? session : await delayedSession;
   @override
   Future<AuthSessionEntity> login({
     required String email,
@@ -27,7 +31,8 @@ class _FakeAuthRepo implements AuthRepository {
   @override
   Future<void> logout() async {}
   @override
-  Future<AuthSessionEntity> refreshSession() => throw UnimplementedError();
+  Future<AuthSessionEntity> refreshSession() =>
+      delayedRefresh ?? (throw UnimplementedError());
 
   @override
   Future<void> requestPasswordReset(
@@ -134,6 +139,42 @@ class _SpyRequestRepo implements RequestRepository {
 
 void main() {
   group('AuthGate Isolation Tests (FR-001, US1)', () {
+    testWidgets(
+        'cached session restores through refresh directly to home without a login frame',
+        (tester) async {
+      final cached = Completer<AuthSessionEntity?>();
+      final refreshed = Completer<AuthSessionEntity>();
+      final attendanceRepo = _SpyAttendanceRepo();
+      final requestRepo = _SpyRequestRepo();
+      const session = AuthSessionEntity(
+          accessToken: 'cached-test',
+          refreshToken: 'refresh-test',
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+          role: UserRole.employee,
+          email: 'employee@example.test',
+          displayName: 'Synthetic User');
+      await tester.pumpWidget(AttendApp(
+          authRepository: _FakeAuthRepo(session,
+              delayedSession: cached.future, delayedRefresh: refreshed.future),
+          attendanceRepository: attendanceRepo,
+          requestRepository: requestRepo,
+          dynamicRequestRepository: FakeDynamicRequestRepo(),
+          profileRepository: StubProfileRepository(),
+          dashboardRepository: StubDashboardRepository()));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byKey(const Key('login_email_field')), findsNothing);
+      expect(attendanceRepo.getContextCallCount, 0);
+      cached.complete(session);
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byKey(const Key('login_email_field')), findsNothing);
+      expect(requestRepo.listRequestsCallCount, 0);
+      refreshed.complete(session);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('login_email_field')), findsNothing);
+      expect(find.byType(BottomNavigationBar), findsOneWidget);
+    });
+
     testWidgets(
         'Unauthenticated session NEVER calls protected attendance or request APIs',
         (tester) async {

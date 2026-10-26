@@ -1,12 +1,8 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:attend_mobile/core/api/api_client.dart';
-import 'package:attend_mobile/core/auth/token_storage.dart';
 import 'package:attend_mobile/core/design_system/app_theme.dart';
 import 'package:attend_mobile/core/design_system/widgets/wolf_card.dart';
 import 'package:attend_mobile/core/design_system/widgets/skeleton_loaders.dart';
-import 'package:attend_mobile/core/network/server_connection_dialog.dart';
 import 'package:attend_mobile/features/advances/domain/advance_repository.dart';
 import 'package:attend_mobile/features/advances/presentation/cubit/advance_list_cubit.dart';
 import 'package:attend_mobile/features/advances/presentation/screens/advance_list_screen.dart';
@@ -702,39 +698,6 @@ class _ProfileScreenContent extends StatelessWidget {
                               .updatePreferences(profile.preferences
                                   .copyWith(reducedMotion: value)),
                         ),
-                        const Divider(height: 12, color: AppTheme.surface03),
-                        if (kDebugMode) ...[
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.router,
-                                color: AppTheme.primaryColor),
-                            title: const Text(
-                              'إعدادات الاتصال بالخادم المحلي',
-                              style: TextStyle(
-                                  color: AppTheme.textPrimary, fontSize: 14),
-                            ),
-                            subtitle: const Text(
-                              'تغيير عنوان IP أو وضع USB / Wi-Fi',
-                              style: TextStyle(
-                                  color: AppTheme.textSecondary, fontSize: 12),
-                            ),
-                            trailing: const Icon(Icons.chevron_right,
-                                color: AppTheme.steel),
-                            onTap: () {
-                              try {
-                                final apiClient = context.read<ApiClient>();
-                                final tokenStorage =
-                                    context.read<TokenStorage>();
-                                ServerConnectionDialog.show(
-                                  context,
-                                  apiClient: apiClient,
-                                  tokenStorage: tokenStorage,
-                                );
-                              } catch (_) {}
-                            },
-                          ),
-                          const Divider(height: 12, color: AppTheme.surface03),
-                        ],
                       ],
                     ),
                   ),

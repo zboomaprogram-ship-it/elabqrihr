@@ -93,6 +93,25 @@ void main() {
       ),
     ];
 
+    test('keeps the initial outbox snapshot across history load and refresh',
+        () async {
+      when(() => repository.watchPendingRequests())
+          .thenAnswer((_) => Stream.value(sampleRequests));
+      when(() => repository.listMyRequests()).thenAnswer((_) async => []);
+      when(() => repository.getMyLeaveBalances()).thenAnswer((_) async => []);
+      final cubit = EmployeeRequestsCubit(repository: repository);
+      addTearDown(cubit.close);
+
+      // A restored local database emits before the slower history API returns.
+      await Future<void>.delayed(Duration.zero);
+      await cubit.loadRequests();
+      expect((cubit.state as EmployeeRequestsLoaded).pendingOutboxCount, 1);
+
+      // A refresh must not require a second database change to expose sync.
+      await cubit.loadRequests(refresh: true);
+      expect((cubit.state as EmployeeRequestsLoaded).pendingOutboxCount, 1);
+    });
+
     blocTest<EmployeeRequestsCubit, EmployeeRequestsState>(
       'loadRequests emits [Loading, Loaded] on success',
       build: () {
