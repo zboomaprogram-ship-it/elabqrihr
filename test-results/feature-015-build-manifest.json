@@ -1,0 +1,20 @@
+{
+  "feature": "015-hr-sovereign-control",
+  "generatedAt": "2026-10-17T12:30:22+03:00",
+  "platform": "android",
+  "applicationId": "com.zbooma.elabqrihr",
+  "versionName": "1.0.9",
+  "versionCode": 12,
+  "artifact": "build/app/outputs/bundle/release/app-release.aab",
+  "sizeBytes": 56236146,
+  "sha256": "f50a1965550f3a819dd225769d7b6e4d2699e44b76aade721150b86752a02159",
+  "signatureVerification": "jar verified",
+  "verification": {
+    "flutterAnalyze": "pass",
+    "flutterTests": 417,
+    "focusedAttendanceArchitectureCompositionTests": 96,
+    "physicalDeviceScenarios": 5,
+    "physicalDevice": "Vivo V2254 / Android 13 / 10JE1B00ZB000E8",
+    "physicalDeviceApiMode": "in-process repository test double"
+  }
+}

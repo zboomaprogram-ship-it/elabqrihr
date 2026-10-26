@@ -1,0 +1,13 @@
+{
+  "feature": "020-build20-emergency-control-guard",
+  "versionName": "1.0.17",
+  "versionCode": 20,
+  "artifact": "build/app/outputs/bundle/release/app-release.aab",
+  "sha256": "6cd39dc7bc1fb9dab3e36234b695d029e37b2a76774c331a9ca0910c5f77b5a2",
+  "signingCertificateSha256": "62:E3:BC:31:EE:4E:1C:1F:2F:AE:68:C1:E9:3F:43:CD:95:79:66:6A:4A:C8:96:63:46:9D:14:67:EF:42:D2:CA",
+  "builtAt": "2026-10-22T11:47:00+03:00",
+  "notes": [
+    "Build includes the authenticated mobile configuration provider and attendance submit guard.",
+    "The upload certificate is self-signed, as expected for an Android upload key; Google Play performs distribution signing."
+  ]
+}

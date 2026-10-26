@@ -1,0 +1,19 @@
+{
+  "feature": "019-mobile-emergency-controls",
+  "versionName": "1.0.16",
+  "versionCode": 19,
+  "artifact": {
+    "path": "build/app/outputs/bundle/release/app-release.aab",
+    "sha256": "c6539e0e4175f3dc3523da39cddac3d8b0ce5ce9a6481b92bbca6c04d1349da4",
+    "signed": true,
+    "signatureVerification": "jarsigner verified; upload certificate is self-signed and has no timestamp"
+  },
+  "verification": {
+    "flutterAnalyze": "passed",
+    "architectureBoundaries": "passed",
+    "targetedFeatureTests": "passed (35 tests: mobile controls, notification routing, actionable/read behavior, dynamic request contract)",
+    "signatureVerification": "passed",
+    "fullFlutterSuite": "not rerun after the final change; Feature 019 relevant suite passed"
+  },
+  "generatedAt": "2026-10-22T07:10:16.517Z"
+}

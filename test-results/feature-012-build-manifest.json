@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "feature": "012-production-trust-readiness",
+  "generatedAt": "2026-10-06T21:05:00Z",
+  "builds": {
+    "android": {
+      "applicationId": "com.zbooma.elabqrihr",
+      "versionName": "1.0.2",
+      "versionCode": 3,
+      "buildType": "release",
+      "artifactPath": "build/app/outputs/bundle/release/app-release.aab",
+      "fileSizeBytes": 55679385,
+      "sha256": "881efd7d6104f7876dc43a985dedbca2c4e8e299413b727e648fda0b254d0a91",
+      "keyAlias": "upload",
+      "signingScheme": "v2+v3"
+    },
+    "ios": {
+      "bundleId": "com.zbooma.elabqrihr",
+      "version": "1.0.2",
+      "buildNumber": "3",
+      "buildType": "release",
+      "artifactPath": "build/ios/iphoneos/Runner.app",
+      "executablePath": "build/ios/iphoneos/Runner.app/Runner",
+      "executableSha256": "eaa5516b2893e54d2c2e1e2c30dcb86cb397ef01810e46030afd51b7aad7ba01",
+      "minimumOSVersion": "15.0",
+      "schemes": ["Runner"]
+    }
+  },
+  "verifications": {
+    "staticAnalysis": "PASS (0 issues)",
+    "flutterTestSuite": "PASS (355/355 tests)",
+    "iosUnitTrustSuite": "PASS (5/5 tests)",
+    "acceptanceSuite": "PASS (5/5 tests)",
+    "zeroRawExceptionsInUI": true,
+    "backgroundLocationExcluded": true
+  }
+}

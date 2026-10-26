@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "385268233795",
+    "project_id": "elabqrihr",
+    "storage_bucket": "elabqrihr.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:385268233795:android:6c4d9aae78da01fe1246f6",
+        "android_client_info": {
+          "package_name": "com.zbooma.elabqrihr"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBL-U0BSQJVc4paNwzjwlqx7mcAIJmN-so"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

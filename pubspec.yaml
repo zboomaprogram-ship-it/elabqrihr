@@ -1,0 +1,75 @@
+name: attend_mobile
+description: "Android-first Flutter client for Attend SaaS"
+publish_to: 'none'
+version: 1.0.18+21
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # State management & DI
+  flutter_bloc: ^9.1.1
+  bloc: ^9.1.0
+  equatable: ^2.0.7
+
+  # Networking
+  dio: ^5.8.0+1
+
+  # Local Persistence & Outbox (User Story 3)
+  drift: ^2.24.2
+  sqlite3: ^2.4.6
+  sqlcipher_flutter_libs: ^0.6.8
+  path_provider: ^2.1.5
+  path: ^1.9.1
+
+  # Device & Location (User Story 2)
+  geolocator: ^13.0.2
+  device_info_plus: ^11.3.0
+  uuid: ^4.5.1
+  crypto: ^3.0.6
+
+  # Secure Storage
+  flutter_secure_storage: ^9.2.4
+
+  # Icons & UI
+  cupertino_icons: ^1.0.8
+  intl: ^0.20.2
+  lottie: ^3.1.2
+  file_picker: ^11.0.3
+  connectivity_plus: ^6.1.4
+  timezone: ^0.10.1
+  firebase_core: 3.11.0
+  firebase_messaging: 15.2.2
+  firebase_crashlytics: 4.3.2
+  package_info_plus: ^9.0.1
+  workmanager: 0.10.10
+  flutter_local_notifications: ^20.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  test: ^1.25.0
+  flutter_lints: ^5.0.0
+  bloc_test: ^10.0.0
+  mocktail: ^1.0.4
+
+  # Drift code generation
+  drift_dev: ^2.24.2
+  build_runner: ^2.4.15
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/animations/
+  fonts:
+    - family: Cairo
+      fonts:
+        - asset: assets/fonts/Cairo-Variable.ttf
