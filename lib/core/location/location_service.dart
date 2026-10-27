@@ -38,7 +38,7 @@ class GeolocatorLocationService implements LocationService {
       );
     }
 
-    if (!kIsWeb) {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
       try {
         final accuracyStatus = await Geolocator.getLocationAccuracy();
         if (accuracyStatus == LocationAccuracyStatus.reduced) {
@@ -51,84 +51,65 @@ class GeolocatorLocationService implements LocationService {
       }
     }
 
-    // 1. Inspect cached position from OS
+    // 1. Check cached position from OS first (instant, zero binder lock)
     Position? cachedPosition;
     try {
       cachedPosition = await Geolocator.getLastKnownPosition();
       if (cachedPosition != null && cachedPosition.isMocked) {
         throw const MockLocationDetectedException();
       }
+      // If we have a fresh cached position (within 3 minutes and <= 65m accuracy), use it immediately!
+      if (cachedPosition != null &&
+          _isFresh(cachedPosition, maxAgeMinutes: 3) &&
+          cachedPosition.accuracy <= 65) {
+        return _toGeoPoint(cachedPosition);
+      }
     } catch (e) {
       if (e is MockLocationDetectedException) rethrow;
     }
 
-    // 2. Multi-tier acquisition with graceful fallbacks
+    // 2. Request a fresh position fix with a tight 5-second timeout via FusedLocationProvider
     Position? position;
-
-    // Tier A: Fast high-accuracy fix (bounded to 8 seconds to prevent long UI lock)
     try {
-      final highAccPos = await Geolocator.getCurrentPosition(
+      final freshPos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 8),
+          timeLimit: Duration(seconds: 5),
         ),
       );
-      if (highAccPos.isMocked) throw const MockLocationDetectedException();
-      if (_isFresh(highAccPos)) {
-        position = highAccPos;
-      }
+      if (freshPos.isMocked) throw const MockLocationDetectedException();
+      position = freshPos;
     } catch (e) {
       if (e is MockLocationDetectedException) rethrow;
     }
 
-    // Tier B: Native Android LocationManager fallback
-    // Critical on Android vendors (e.g. Vivo/Xiaomi/Samsung) where Google Fused Provider stalls indoors
-    if (position == null && !kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      try {
-        final nativePos = await Geolocator.getCurrentPosition(
-          locationSettings: AndroidSettings(
-            accuracy: LocationAccuracy.best,
-            forceLocationManager: true,
-            timeLimit: const Duration(seconds: 8),
-          ),
-        );
-        if (nativePos.isMocked) throw const MockLocationDetectedException();
-        if (_isFresh(nativePos, maxAgeMinutes: 2)) {
-          position = nativePos;
-        }
-      } catch (e) {
-        if (e is MockLocationDetectedException) rethrow;
-      }
-    }
-
-    // Tier C: Safe cached position fallback if recent (< 3 min, accuracy <= 50m)
+    // 3. Fallback: If fresh position timed out or failed (indoors/no satellites),
+    // safely reuse the cached position if available within 15 minutes
     if (position == null && cachedPosition != null) {
-      if (_isFresh(cachedPosition, maxAgeMinutes: 3) && cachedPosition.accuracy <= 50) {
+      if (_isFresh(cachedPosition, maxAgeMinutes: 15)) {
         position = cachedPosition;
       }
     }
 
-    // Tier D: Medium accuracy fallback (WiFi/Cell network assisted)
+    // 4. Fallback 2: Fast medium accuracy (Cell/WiFi) with 4-second timeout
     if (position == null) {
       try {
         final mediumPos = await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(
             accuracy: LocationAccuracy.medium,
-            timeLimit: Duration(seconds: 6),
+            timeLimit: Duration(seconds: 4),
           ),
         );
         if (mediumPos.isMocked) throw const MockLocationDetectedException();
-        if (_isFresh(mediumPos, maxAgeMinutes: 2)) {
-          position = mediumPos;
-        }
+        position = mediumPos;
       } catch (e) {
         if (e is MockLocationDetectedException) rethrow;
       }
     }
 
-    // Tier E: Last resort cached position if captured within 10 minutes
+    // 5. Fallback 3: Any last known position up to 30 minutes
     if (position == null && cachedPosition != null) {
-      if (_isFresh(cachedPosition, maxAgeMinutes: 10)) {
+      if (_isFresh(cachedPosition, maxAgeMinutes: 30)) {
         position = cachedPosition;
       }
     }
@@ -139,6 +120,10 @@ class GeolocatorLocationService implements LocationService {
       );
     }
 
+    return _toGeoPoint(position);
+  }
+
+  GeoPoint _toGeoPoint(Position position) {
     return GeoPoint(
       latitude: position.latitude,
       longitude: position.longitude,
