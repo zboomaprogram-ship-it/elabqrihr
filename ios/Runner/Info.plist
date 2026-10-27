@@ -40,6 +40,14 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>يُطلب إذن الموقع فقط للتحقق من التواجد داخل النطاق المعتمد للفرع عند تسجيل الحضور أو الانصراف، ولا يتم التتبع أو استخدام الموقع في الخلفية مطلقاً.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>يُطلب إذن الموقع فقط للتحقق من التواجد داخل النطاق المعتمد للفرع عند تسجيل الحضور أو الانصراف.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>يُستخدم إذن الكاميرا لالتقاط وإرفاق المستندات والإيصالات الداعمة للطلبات والتقارير.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>يُستخدم إذن مكتبة الصور لرفع وإرفاق المستندات والشهادات الطبية والإيصالات الداعمة للطلبات.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
