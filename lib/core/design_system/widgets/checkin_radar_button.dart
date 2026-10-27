@@ -9,6 +9,7 @@ class CheckInRadarButton extends StatefulWidget {
   final bool disabled;
   final bool loading;
   final bool isCheckOut;
+  final bool isCompleted;
   final VoidCallback onTap;
 
   const CheckInRadarButton({
@@ -19,6 +20,7 @@ class CheckInRadarButton extends StatefulWidget {
     required this.disabled,
     required this.loading,
     this.isCheckOut = false,
+    this.isCompleted = false,
     required this.onTap,
   });
 
@@ -60,14 +62,18 @@ class _CheckInRadarButtonState extends State<CheckInRadarButton>
 
   @override
   Widget build(BuildContext context) {
-    final activeColor = widget.isCheckOut ? AppTheme.errorColor : AppTheme.primaryColor;
+    final activeColor = widget.isCompleted
+        ? AppTheme.successColor
+        : widget.isCheckOut
+            ? AppTheme.errorColor
+            : AppTheme.primaryColor;
 
     return Center(
       child: Stack(
         alignment: Alignment.center,
         children: [
           // Outer radar glowing ring
-          if (!widget.disabled)
+          if (!widget.disabled && !widget.isCompleted)
             AnimatedBuilder(
               animation: _pulseAnimation,
               builder: (context, child) {
@@ -89,7 +95,7 @@ class _CheckInRadarButtonState extends State<CheckInRadarButton>
             ),
 
           // Intermediate ring
-          if (!widget.disabled)
+          if (!widget.disabled && !widget.isCompleted)
             Container(
               width: 174,
               height: 174,
@@ -104,7 +110,9 @@ class _CheckInRadarButtonState extends State<CheckInRadarButton>
 
           // Main Button
           GestureDetector(
-            onTap: widget.disabled || widget.loading ? null : widget.onTap,
+            onTap: widget.isCompleted || widget.disabled || widget.loading
+                ? null
+                : widget.onTap,
             child: Container(
               width: 156,
               height: 156,
@@ -114,16 +122,22 @@ class _CheckInRadarButtonState extends State<CheckInRadarButton>
                   color: Colors.white.withValues(alpha: 0.18),
                   width: 1.5,
                 ),
-                gradient: widget.disabled
+                gradient: widget.isCompleted
                     ? const LinearGradient(
-                        colors: [AppTheme.surface03, AppTheme.surface02],
+                        colors: [Color(0xFF047857), Color(0xFF10B981)],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       )
-                    : widget.isCheckOut
-                        ? AppTheme.dangerGradient
-                        : AppTheme.primaryGradient,
-                boxShadow: widget.disabled
+                    : widget.disabled
+                        ? const LinearGradient(
+                            colors: [AppTheme.surface03, AppTheme.surface02],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          )
+                        : widget.isCheckOut
+                            ? AppTheme.dangerGradient
+                            : AppTheme.primaryGradient,
+                boxShadow: (widget.disabled && !widget.isCompleted)
                     ? []
                     : [
                         BoxShadow(

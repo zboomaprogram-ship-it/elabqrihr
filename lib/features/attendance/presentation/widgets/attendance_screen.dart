@@ -183,6 +183,12 @@ class _AttendanceScreenBody extends StatelessWidget {
             if (state is AttendanceReady) {
               final shift = state.shiftContext;
               final isCheckedIn = shift.isCheckedIn;
+              final isCompleted = shift.isCompleted ||
+                  (shift.lastEvent != null &&
+                      shift.lastEvent!.status ==
+                          AttendanceValidationStatus.accepted &&
+                      shift.lastEvent!.eventType ==
+                          AttendanceEventType.checkOut);
 
               return RefreshIndicator(
                 onRefresh: () =>
@@ -343,17 +349,27 @@ class _AttendanceScreenBody extends StatelessWidget {
 
                       // ── CheckIn Radar Button (central operational CTA) ──
                       CheckInRadarButton(
-                        title: isCheckedIn
-                            ? AppStringsAr.checkOut
-                            : AppStringsAr.checkIn,
-                        subtitle: isCheckedIn
-                            ? 'اضغط لتسجيل الانصراف'
-                            : 'اضغط لتسجيل الحضور',
-                        icon: isCheckedIn ? Icons.logout : Icons.fingerprint,
+                        title: isCompleted
+                            ? 'اكتملت الوردية'
+                            : isCheckedIn
+                                ? AppStringsAr.checkOut
+                                : AppStringsAr.checkIn,
+                        subtitle: isCompleted
+                            ? 'تم انتهاء دوام اليوم بنجاح'
+                            : isCheckedIn
+                                ? 'اضغط لتسجيل الانصراف'
+                                : 'اضغط لتسجيل الحضور',
+                        icon: isCompleted
+                            ? Icons.task_alt_rounded
+                            : isCheckedIn
+                                ? Icons.logout
+                                : Icons.fingerprint,
                         isCheckOut: isCheckedIn,
-                        disabled: state.isSubmitting,
+                        isCompleted: isCompleted,
+                        disabled: state.isSubmitting || isCompleted,
                         loading: state.isSubmitting,
                         onTap: () {
+                          if (isCompleted) return;
                           MobileActionGuardDecision? decision;
                           try {
                             decision = context
@@ -407,7 +423,15 @@ class _AttendanceScreenBody extends StatelessWidget {
     String text = AppStringsAr.statusNotStarted;
     Color color = Colors.grey;
 
-    if (shift.isCheckedIn) {
+    final isCompleted = shift.isCompleted ||
+        (shift.lastEvent != null &&
+            shift.lastEvent!.status == AttendanceValidationStatus.accepted &&
+            shift.lastEvent!.eventType == AttendanceEventType.checkOut);
+
+    if (isCompleted) {
+      text = AppStringsAr.statusCompleted;
+      color = AppTheme.successColor;
+    } else if (shift.isCheckedIn) {
       text = AppStringsAr.statusPresent;
       color = AppTheme.successColor;
     } else if (shift.lastEvent != null) {

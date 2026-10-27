@@ -440,6 +440,7 @@ class ApiClient {
 
       final state = data['state'] as String;
       final isCheckedIn = state == 'checked_in';
+      final isCompleted = state == 'completed';
 
       final startsAtRaw = data['startsAt'] as String?;
       final endsAtRaw = data['endsAt'] as String?;
@@ -468,6 +469,7 @@ class ApiClient {
         ),
         allowedRadiusMeters: _asDouble(branch['radiusMeters'], 150.0),
         isCheckedIn: isCheckedIn,
+        isCompleted: isCompleted,
       );
     } on DioException catch (e) {
       if (e.error is ApiException) throw e.error as ApiException;

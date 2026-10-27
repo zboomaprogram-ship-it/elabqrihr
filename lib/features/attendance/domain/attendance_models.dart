@@ -188,6 +188,7 @@ class ShiftContextEntity extends Equatable {
   final GeoPoint branchLocation;
   final double allowedRadiusMeters;
   final bool isCheckedIn;
+  final bool isCompleted;
   final AttendanceEventEntity? lastEvent;
 
   const ShiftContextEntity({
@@ -200,6 +201,7 @@ class ShiftContextEntity extends Equatable {
     required this.branchLocation,
     required this.allowedRadiusMeters,
     required this.isCheckedIn,
+    this.isCompleted = false,
     this.lastEvent,
   });
 
@@ -213,6 +215,7 @@ class ShiftContextEntity extends Equatable {
     GeoPoint? branchLocation,
     double? allowedRadiusMeters,
     bool? isCheckedIn,
+    bool? isCompleted,
     AttendanceEventEntity? lastEvent,
   }) {
     return ShiftContextEntity(
@@ -225,6 +228,7 @@ class ShiftContextEntity extends Equatable {
       branchLocation: branchLocation ?? this.branchLocation,
       allowedRadiusMeters: allowedRadiusMeters ?? this.allowedRadiusMeters,
       isCheckedIn: isCheckedIn ?? this.isCheckedIn,
+      isCompleted: isCompleted ?? this.isCompleted,
       lastEvent: lastEvent ?? this.lastEvent,
     );
   }
@@ -240,6 +244,7 @@ class ShiftContextEntity extends Equatable {
         branchLocation,
         allowedRadiusMeters,
         isCheckedIn,
+        isCompleted,
         lastEvent,
       ];
 }
