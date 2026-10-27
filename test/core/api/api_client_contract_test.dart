@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:attend_mobile/core/api/api_client.dart';
+import 'package:attend_mobile/core/trust/trust_ports.dart';
+import 'package:attend_mobile/features/notifications/data/push_registration_coordinator.dart';
 import 'package:attend_mobile/core/auth/token_storage.dart';
 import 'package:attend_mobile/features/attendance/domain/attendance_models.dart';
 import 'package:attend_mobile/features/auth/domain/auth_models.dart';
@@ -692,11 +694,103 @@ void main() {
       final sessionAfter = await tokenStorage.getSession();
       expect(sessionAfter, isNull);
     });
+    test(
+        'logout removes revoked credentials before scoped push cleanup and never refreshes them',
+        () async {
+      const session = AuthSessionEntity(
+          accessToken: 'logout-access',
+          refreshToken: 'logout-refresh',
+          tenantId: 'tenant-logout',
+          userId: 'user-logout',
+          role: UserRole.employee,
+          email: 'employee@example.test',
+          displayName: 'Synthetic employee');
+      final storage = _InMemoryTokenStorage(initialSession: session)
+        ..installationId = '00000000-0000-4000-8000-000000000001';
+      final requests = <RequestOptions>[];
+      var revoked = false;
+      final transport = Dio(BaseOptions(baseUrl: 'http://test'));
+      transport.httpClientAdapter = _MockHttpAdapter((options) async {
+        requests.add(options);
+        if (options.path == '/auth/logout') {
+          revoked = true;
+          return ResponseBody.fromString('', 204);
+        }
+        if (options.path.startsWith('/notification-devices/') && !revoked) {
+          return ResponseBody.fromString('', 204);
+        }
+        return ResponseBody.fromString('{"code":"SESSION_INACTIVE"}', 401,
+            headers: {
+              Headers.contentTypeHeader: [Headers.jsonContentType]
+            });
+      });
+      final client = ApiClient(
+          baseUrl: 'http://test', tokenStorage: storage, dio: transport);
+      final push = _LogoutPushPort();
+      final coordinator = PushRegistrationCoordinator(
+          apiClient: client,
+          tokenStorage: storage,
+          pushNotifications: push,
+          installationEvidence: _LogoutInstallation());
+      var invalidations = 0, expired = 0;
+      client.onBeforeLogout = (_) => coordinator.disable();
+      client.onSessionInvalidated = (previous) async {
+        invalidations++;
+        expect(previous.userId, session.userId);
+        expect(await storage.getSession(), isNull,
+            reason:
+                'Revoked credentials must not be available to authenticated push cleanup');
+        await coordinator.disable();
+      };
+      client.onSessionExpired = () {
+        expired++;
+      };
+      await client.logout();
+      expect(await storage.getSession(), isNull);
+      expect(invalidations, 1);
+      expect(expired, 1);
+      expect(push.disabled, 2);
+      expect(requests.map((r) => r.path).toList(), [
+        '/notification-devices/00000000-0000-4000-8000-000000000001',
+        '/auth/logout'
+      ]);
+      expect(requests.where((r) => r.path == '/auth/refresh'), isEmpty);
+      await coordinator.dispose();
+    });
+    test(
+        'cleanup failure still clears credentials and announces the expired session',
+        () async {
+      const session = AuthSessionEntity(
+          accessToken: 'logout-access',
+          refreshToken: 'logout-refresh',
+          tenantId: 'tenant-logout',
+          userId: 'user-logout',
+          role: UserRole.employee,
+          email: 'employee@example.test',
+          displayName: 'Synthetic employee');
+      final storage = _InMemoryTokenStorage(initialSession: session);
+      final transport = Dio(BaseOptions(baseUrl: 'http://test'));
+      transport.httpClientAdapter =
+          _MockHttpAdapter((options) async => ResponseBody.fromString('', 204));
+      final client = ApiClient(
+          baseUrl: 'http://test', tokenStorage: storage, dio: transport);
+      var expired = 0;
+      client.onSessionInvalidated = (_) async {
+        throw StateError('Synthetic cleanup storage failure');
+      };
+      client.onSessionExpired = () {
+        expired++;
+      };
+      await expectLater(client.logout(), throwsStateError);
+      expect(await storage.getSession(), isNull);
+      expect(expired, 1);
+    });
   });
 }
 
 class _InMemoryTokenStorage extends TokenStorage {
   AuthSessionEntity? _session;
+  String? installationId;
 
   _InMemoryTokenStorage({AuthSessionEntity? initialSession})
       : _session = initialSession;
@@ -713,6 +807,11 @@ class _InMemoryTokenStorage extends TokenStorage {
   Future<void> clearSession() async {
     _session = null;
   }
+
+  @override
+  Future<String?> getDeviceInstallationRegistration(
+          {required String tenantId, required String userId}) async =>
+      installationId;
 }
 
 final class _MockHttpAdapter implements HttpClientAdapter {
@@ -731,4 +830,35 @@ final class _MockHttpAdapter implements HttpClientAdapter {
   ) {
     return handler(options);
   }
+}
+
+final class _LogoutInstallation implements RegisteredInstallationPort {
+  @override
+  Future<String> ensureRegisteredInstallation() async =>
+      '00000000-0000-4000-8000-000000000001';
+}
+
+final class _LogoutPushPort implements PushNotificationPort {
+  int disabled = 0;
+  @override
+  Future<void> disable() async {
+    disabled++;
+  }
+
+  @override
+  Future<PushPermissionState> currentPermission() async =>
+      PushPermissionState.granted;
+  @override
+  Future<PushPermissionState> requestPermission() async =>
+      PushPermissionState.granted;
+  @override
+  Future<String?> enableAndGetToken() async => null;
+  @override
+  Stream<String> get tokenRefreshes => const Stream.empty();
+  @override
+  Stream<String> get foregroundMessageIds => const Stream.empty();
+  @override
+  Stream<String> get openedMessageIds => const Stream.empty();
+  @override
+  Future<String?> initialMessageId() async => null;
 }

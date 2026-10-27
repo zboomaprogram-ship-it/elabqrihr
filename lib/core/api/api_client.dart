@@ -154,9 +154,14 @@ class ApiClient {
   }
 
   Future<void> _clearInvalidSession(AuthSessionEntity? session) async {
-    if (session != null) await onSessionInvalidated?.call(session);
+    // Cleanup receives the previous identity explicitly. Do not let it make
+    // authenticated requests with credentials the server has already revoked.
     await _tokenStorage.clearSession();
-    onSessionExpired?.call();
+    try {
+      if (session != null) await onSessionInvalidated?.call(session);
+    } finally {
+      onSessionExpired?.call();
+    }
   }
 
   void _setupInterceptors() {
