@@ -34,6 +34,60 @@ class AttendanceEvidenceService implements RegisteredInstallationPort {
   final Future<PackageInfo> Function() _packageInfo;
   final Map<String, Future<String>> _inFlightRegistrations = {};
 
+  /// Capture proof only for an installation already registered while online.
+  Future<OfflineAttendanceProof> captureForOffline(
+      AttendanceEventEntity event) async {
+    final session = await _tokenStorage.getSession();
+    final signer = _deviceAttestation;
+    if (session == null || signer is! OfflineCaptureSigningPort) {
+      throw const AttendanceTrustUnavailableException();
+    }
+    final installation = await _tokenStorage.getDeviceInstallationRegistration(
+      tenantId: session.tenantId,
+      userId: session.userId,
+    );
+    if (installation == null || installation.isEmpty) {
+      throw const AttendanceTrustUnavailableException();
+    }
+    final digest = canonicalDigest(event);
+    final signature =
+        await (signer as OfflineCaptureSigningPort).signCaptureDigest(digest);
+    return OfflineAttendanceProof(
+        installationId: installation, digest: digest, signature: signature);
+  }
+
+  /// Obtain a new challenge/token but transmit only the original capture signature.
+  Future<AttendanceEvidenceDto> prepareReplay(
+      AttendanceEventEntity event) async {
+    final proof = event.captureProof;
+    if (proof == null ||
+        proof.digest != canonicalDigest(event) ||
+        proof.signature.isEmpty) {
+      throw const AttendanceTrustUnavailableException();
+    }
+    final session = await _tokenStorage.getSession();
+    if (session == null ||
+        await _tokenStorage.getDeviceInstallationRegistration(
+              tenantId: session.tenantId,
+              userId: session.userId,
+            ) !=
+            proof.installationId) {
+      throw const AttendanceTrustUnavailableException();
+    }
+    final fresh = await prepare(event);
+    if (fresh.installationId != proof.installationId ||
+        fresh.contentDigest != proof.digest) {
+      throw const AttendanceTrustUnavailableException();
+    }
+    return AttendanceEvidenceDto(
+      contentDigest: proof.digest,
+      installationId: proof.installationId,
+      challengeId: fresh.challengeId,
+      signature: proof.signature,
+      integrityToken: fresh.integrityToken,
+    );
+  }
+
   Future<AttendanceEvidenceDto> prepare(AttendanceEventEntity event) async {
     final String installation;
     try {
@@ -252,7 +306,9 @@ class AttendanceEvidenceService implements RegisteredInstallationPort {
         'latitude': event.location.latitude,
         'longitude': event.location.longitude,
         'accuracyMeters': event.location.accuracyMeters ?? 10.0,
-        'capturedAt': occurredAt,
+        'capturedAt': (event.location.timestamp ?? event.capturedAt)
+            .toUtc()
+            .toIso8601String(),
       },
     };
     return sha256.convert(utf8.encode(jsonEncode(canonical))).toString();

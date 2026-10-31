@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:attend_mobile/core/api/api_client.dart';
 import 'package:attend_mobile/core/errors/app_failure.dart';
 import 'package:attend_mobile/features/requests/domain/request_models.dart';
 import 'package:attend_mobile/features/requests/domain/request_repository.dart';
@@ -36,7 +37,9 @@ class RequestSyncService {
   }) : _repository = repository;
 
   Future<List<RequestSyncResult>> syncBatch(
-      List<RequestEntity> pendingRequests) async {
+    List<RequestEntity> pendingRequests, {
+    Future<RequestEntity> Function(RequestEntity request)? submitRequest,
+  }) async {
     final results = <RequestSyncResult>[];
 
     for (final req in pendingRequests) {
@@ -46,11 +49,13 @@ class RequestSyncService {
       while (attempt < maxRetries) {
         attempt++;
         try {
-          final outcome = await _repository.submitRequest(
-            requestId: req.id,
-            type: req.type,
-            payload: req.details,
-          );
+          final outcome = submitRequest == null
+              ? await _repository.submitRequest(
+                  requestId: req.id,
+                  type: req.type,
+                  payload: req.details,
+                )
+              : await submitRequest(req);
 
           result = RequestSyncResult(
             requestId: req.id,
@@ -59,6 +64,7 @@ class RequestSyncService {
           );
           break; // Terminal success
         } catch (e) {
+          if (e is SessionIdentityChangedException) rethrow;
           final failure = AppFailureMapper.fromGeneric(e);
 
           if (failure is ConflictFailure) {

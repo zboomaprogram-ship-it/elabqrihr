@@ -65,6 +65,7 @@ void main() {
               final loc = body['location'] as Map<String, dynamic>;
               expect(loc.containsKey('capturedAt'), isTrue);
               expect(loc.containsKey('accuracyMeters'), isTrue);
+              expect(loc['capturedAt'], '2026-09-20T21:59:40.000Z');
 
               return handler.resolve(
                 Response(
@@ -341,8 +342,11 @@ void main() {
         eventId: '8c52084c-cb14-41d9-813a-773cefb180a2',
         eventType: AttendanceEventType.checkIn,
         shiftInstanceId: '8c52084c-cb14-41d9-813a-773cefb180a0',
-        location: const GeoPoint(
-            latitude: 30.0444, longitude: 31.2357, accuracyMeters: 10.0),
+        location: GeoPoint(
+            latitude: 30.0444,
+            longitude: 31.2357,
+            accuracyMeters: 10.0,
+            timestamp: DateTime.utc(2026, 9, 20, 21, 59, 40)),
         capturedAt: DateTime.utc(2026, 9, 20, 22, 0, 0),
       );
 
@@ -479,6 +483,50 @@ void main() {
   });
 
   group('ApiClient Token Refresh & Session Management Tests', () {
+    test('does not retry an old request with a different user session',
+        () async {
+      const first = AuthSessionEntity(
+        accessToken: 'first-token',
+        refreshToken: 'first-refresh',
+        tenantId: 'tenant',
+        userId: 'first',
+        role: UserRole.employee,
+        email: 'first@example.invalid',
+        displayName: 'First',
+      );
+      const second = AuthSessionEntity(
+        accessToken: 'second-token',
+        refreshToken: 'second-refresh',
+        tenantId: 'tenant',
+        userId: 'second',
+        role: UserRole.employee,
+        email: 'second@example.invalid',
+        displayName: 'Second',
+      );
+      final storage = _InMemoryTokenStorage(initialSession: first);
+      final transport = Dio(BaseOptions(baseUrl: 'http://test'));
+      var calls = 0;
+      transport.httpClientAdapter = _MockHttpAdapter((options) async {
+        calls++;
+        if (calls == 1) {
+          await storage.saveSession(second);
+          return ResponseBody.fromString('{}', 401, headers: {
+            Headers.contentTypeHeader: ['application/json']
+          });
+        }
+        return ResponseBody.fromString('{}', 200, headers: {
+          Headers.contentTypeHeader: ['application/json']
+        });
+      });
+      final client = ApiClient(
+          baseUrl: 'http://test', tokenStorage: storage, dio: transport);
+      await expectLater(
+        client.createDynamicRequest(<String, dynamic>{}),
+        throwsA(isA<SessionIdentityChangedException>()),
+      );
+      expect(calls, 1);
+      expect((await storage.getSession())?.userId, 'second');
+    });
     test('401 automatically refreshes token and retries request', () async {
       final dio = Dio(BaseOptions(baseUrl: 'http://test'));
       var requestCount = 0;

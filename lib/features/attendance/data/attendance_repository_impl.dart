@@ -15,6 +15,7 @@ import 'package:attend_mobile/features/auth/domain/auth_models.dart';
 
 class AttendanceRepositoryImpl
     implements AttendanceRepository, HasCurrentLocationCapture {
+  static const _syncBatchLimit = 25;
   final ApiClient _apiClient;
   final LocalAttendanceOutbox _outbox;
   final TokenStorage _tokenStorage;
@@ -39,6 +40,27 @@ class AttendanceRepositoryImpl
         _locationService = locationService,
         _syncService = AttendanceSyncService(
           repository: _DirectApiAttendanceRepo(apiClient),
+          submitEvent: (event, {expectedTenantId, expectedUserId}) async {
+            AttendanceEvidenceDto? replayEvidence;
+            if (evidenceService != null) {
+              if (event.captureProof == null) {
+                return event.copyWith(
+                    status: AttendanceValidationStatus.rejected,
+                    reasonCode: 'OFFLINE_EVIDENCE_UNAVAILABLE');
+              }
+              replayEvidence = await evidenceService.prepareReplay(event);
+            }
+            return apiClient.submitAttendanceEvent(
+              eventId: event.id,
+              eventType: event.eventType,
+              shiftInstanceId: event.shiftInstanceId,
+              location: event.location,
+              capturedAt: event.capturedAt,
+              evidence: replayEvidence,
+              expectedTenantId: expectedTenantId,
+              expectedUserId: expectedUserId,
+            );
+          },
         );
 
   @override
@@ -64,11 +86,12 @@ class AttendanceRepositoryImpl
     if (effectiveLocation == null) {
       effectiveLocation = await _locationService?.getCurrentLocation();
     } else if (effectiveLocation.timestamp == null) {
-      effectiveLocation = effectiveLocation.copyWith(
-        timestamp: DateTime.now().toUtc(),
-      );
-    } else if (DateTime.now().toUtc().difference(effectiveLocation.timestamp!).abs() >
-        const Duration(seconds: 60)) {
+      effectiveLocation = await _locationService?.getCurrentLocation();
+    } else if (DateTime.now()
+            .toUtc()
+            .difference(effectiveLocation.timestamp!)
+            .abs() >
+        const Duration(seconds: 20)) {
       final fresh = await _locationService?.getCurrentLocation();
       if (fresh != null) {
         effectiveLocation = fresh;
@@ -77,13 +100,30 @@ class AttendanceRepositoryImpl
     if (effectiveLocation == null) {
       throw Exception('LocationUnavailable: Unable to capture device location');
     }
+    if (effectiveLocation.timestamp == null) {
+      throw TimeoutException('LocationUnavailable: missing location timestamp');
+    }
+    if (effectiveLocation.timestamp != null &&
+        DateTime.now().toUtc().difference(effectiveLocation.timestamp!).abs() >
+            const Duration(seconds: 20)) {
+      throw TimeoutException('LocationUnavailable: location is stale');
+    }
     if (effectiveLocation.isMocked) {
       throw const MockLocationDetectedException();
     }
 
+    // Drift persists DateTime values at second precision. Normalize before the
+    // first submission so a retry sends the identical signed payload.
+    DateTime seconds(DateTime value) => DateTime.fromMillisecondsSinceEpoch(
+        (value.toUtc().millisecondsSinceEpoch ~/ 1000) * 1000,
+        isUtc: true);
+    if (effectiveLocation.timestamp != null) {
+      effectiveLocation = effectiveLocation.copyWith(
+        timestamp: seconds(effectiveLocation.timestamp!),
+      );
+    }
     final eventId = clientEventId ?? _uuid.v4();
-    final effectiveCapturedAt =
-        (capturedAt ?? DateTime.now()).toUtc();
+    final effectiveCapturedAt = seconds(capturedAt ?? DateTime.now());
 
     final localEvent = AttendanceEventEntity(
       id: eventId,
@@ -103,6 +143,35 @@ class AttendanceRepositoryImpl
         evidence = await _evidenceService.prepare(localEvent);
       } catch (error) {
         final classification = AttendanceFailureClassifier.classify(error);
+        if (classification.isRetryable &&
+            error is AttendanceSubmissionStageException &&
+            error.stage == AttendanceSubmissionStage.integrityChallenge) {
+          OfflineAttendanceProof proof;
+          try {
+            proof = await _evidenceService.captureForOffline(localEvent);
+          } catch (_) {
+            return localEvent.copyWith(
+                status: AttendanceValidationStatus.rejected,
+                reasonCode: 'OFFLINE_EVIDENCE_UNAVAILABLE');
+          }
+          final pending = localEvent.copyWith(
+              captureProof: proof, reasonCode: classification.reasonCode);
+          await _outbox.saveEvent(
+              tenantId: session.tenantId,
+              userId: session.userId,
+              event: pending);
+          await _outbox.updateEventStatus(
+            tenantId: session.tenantId,
+            userId: session.userId,
+            eventId: eventId,
+            status: AttendanceValidationStatus.pendingSync,
+            reasonCode: classification.reasonCode,
+            nextRetryAt: DateTime.now()
+                .toUtc()
+                .add(classification.retryAfter ?? const Duration(seconds: 30)),
+          );
+          return pending;
+        }
         if (_isRevokedDeviceOutcome(classification.reasonCode)) {
           await _purgeRevokedDeviceState(session);
         }
@@ -122,20 +191,31 @@ class AttendanceRepositoryImpl
         location: effectiveLocation,
         capturedAt: effectiveCapturedAt,
         evidence: evidence,
+        expectedTenantId: session.tenantId,
+        expectedUserId: session.userId,
       );
 
       return remoteResult;
     } catch (error) {
+      if (error is SessionIdentityChangedException) rethrow;
       final classification = AttendanceFailureClassifier.classify(error);
       if (classification.isRetryable) {
         // Only genuine transport failures are committed to outbox as pendingSync.
         final nextRetryAt = DateTime.now().toUtc().add(
               classification.retryAfter ?? const Duration(seconds: 30),
             );
+        final queuedEvent = evidence == null
+            ? localEvent
+            : localEvent.copyWith(
+                captureProof: OfflineAttendanceProof(
+                    installationId: evidence.installationId,
+                    digest: evidence.contentDigest,
+                    signature: evidence.signature),
+              );
         await _outbox.saveEvent(
           tenantId: session.tenantId,
           userId: session.userId,
-          event: localEvent.copyWith(reasonCode: classification.reasonCode),
+          event: queuedEvent.copyWith(reasonCode: classification.reasonCode),
         );
         await _outbox.updateEventStatus(
           tenantId: session.tenantId,
@@ -145,7 +225,7 @@ class AttendanceRepositoryImpl
           reasonCode: classification.reasonCode,
           nextRetryAt: nextRetryAt,
         );
-        return localEvent.copyWith(reasonCode: classification.reasonCode);
+        return queuedEvent.copyWith(reasonCode: classification.reasonCode);
       }
 
       // If the server revoked device access or the device is no longer active,
@@ -218,11 +298,16 @@ class AttendanceRepositoryImpl
     final pending = await _outbox.getPendingEvents(
       tenantId: session.tenantId,
       userId: session.userId,
+      limit: _syncBatchLimit,
     );
 
     if (pending.isEmpty) return;
 
-    final results = await _syncService.syncBatch(pending);
+    final results = await _syncService.syncBatch(
+      pending,
+      expectedTenantId: session.tenantId,
+      expectedUserId: session.userId,
+    );
     for (final res in results) {
       AttendanceValidationStatus newStatus;
       bool isRetry = false;

@@ -52,6 +52,11 @@ abstract interface class DeviceAttestationPort {
   });
 }
 
+/// Signs immutable event facts without contacting an integrity provider.
+abstract interface class OfflineCaptureSigningPort {
+  Future<String> signCaptureDigest(String digest);
+}
+
 /// Authenticated registration boundary shared by attendance and optional push.
 /// It exposes the server installation UUID only, never a private key or token.
 abstract interface class RegisteredInstallationPort {

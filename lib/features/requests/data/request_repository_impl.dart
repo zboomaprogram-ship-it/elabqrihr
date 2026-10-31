@@ -15,6 +15,7 @@ class RequestRepositoryImpl
         RequestRepository,
         EmployeeShiftRepository,
         RequestAttachmentRepository {
+  static const _syncBatchLimit = 25;
   final ApiClient _apiClient;
   final AppDriftDatabase _database;
   final TokenStorage _tokenStorage;
@@ -67,7 +68,11 @@ class RequestRepositoryImpl
         ...cleanPayload,
       };
 
-      final remoteDto = await _apiClient.submitRequest(requestBody);
+      final remoteDto = await _apiClient.submitRequest(
+        requestBody,
+        expectedTenantId: session.tenantId,
+        expectedUserId: session.userId,
+      );
 
       await _database.updateRequestStatus(
         tenantId: session.tenantId,
@@ -78,6 +83,7 @@ class RequestRepositoryImpl
 
       return _mapDtoToEntity(remoteDto);
     } catch (e) {
+      if (e is SessionIdentityChangedException) rethrow;
       if (e is ApiException) {
         if (e.statusCode == 409 && e.code == 'CONFLICT_DUPLICATE') {
           await _database.updateRequestStatus(
@@ -362,6 +368,8 @@ class RequestRepositoryImpl
       tenantId: session.tenantId,
       userId: session.userId,
       now: DateTime.now().toUtc(),
+      limit: _syncBatchLimit,
+      dynamicOnly: false,
     );
 
     if (pending.isEmpty) return;
@@ -372,7 +380,19 @@ class RequestRepositoryImpl
         .map(_mapRowToEntity)
         .toList();
     if (entities.isEmpty) return;
-    final results = await _syncService.syncBatch(entities);
+    final identityBoundRepository = _DirectApiRequestRepo(
+      _apiClient,
+      expectedTenantId: session.tenantId,
+      expectedUserId: session.userId,
+    );
+    final results = await _syncService.syncBatch(
+      entities,
+      submitRequest: (request) => identityBoundRepository.submitRequest(
+        requestId: request.id,
+        type: request.type,
+        payload: request.details,
+      ),
+    );
 
     for (final res in results) {
       if (res.outcome == RequestSyncOutcome.synchronized &&
@@ -534,7 +554,15 @@ class RequestRepositoryImpl
 
 class _DirectApiRequestRepo implements RequestRepository {
   final ApiClient _api;
-  _DirectApiRequestRepo(this._api);
+  final String? _expectedTenantId;
+  final String? _expectedUserId;
+
+  _DirectApiRequestRepo(
+    this._api, {
+    String? expectedTenantId,
+    String? expectedUserId,
+  })  : _expectedTenantId = expectedTenantId,
+        _expectedUserId = expectedUserId;
 
   @override
   Future<RequestEntity> submitRequest({
@@ -549,7 +577,11 @@ class _DirectApiRequestRepo implements RequestRepository {
       'type': type.toApiValue(),
       ...cleanPayload,
     };
-    final dto = await _api.submitRequest(requestBody);
+    final dto = await _api.submitRequest(
+      requestBody,
+      expectedTenantId: _expectedTenantId,
+      expectedUserId: _expectedUserId,
+    );
     return RequestEntity(
       id: dto.id,
       employeeId: dto.employeeId,

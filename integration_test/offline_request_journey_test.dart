@@ -22,7 +22,11 @@ class MockOfflineRequestApiClient extends ApiClient {
       {required super.baseUrl, required super.tokenStorage});
 
   @override
-  Future<RequestDto> submitRequest(Map<String, dynamic> requestPayload) async {
+  Future<RequestDto> submitRequest(
+    Map<String, dynamic> requestPayload, {
+    String? expectedTenantId,
+    String? expectedUserId,
+  }) async {
     if (!isOnline) {
       throw const SocketException('Network unreachable: client offline');
     }

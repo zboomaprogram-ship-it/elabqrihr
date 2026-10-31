@@ -9,6 +9,7 @@ import '../domain/dynamic_request_models.dart';
 import '../domain/dynamic_request_repository.dart';
 
 class DynamicRequestRepositoryImpl implements DynamicRequestRepository {
+  static const _syncBatchLimit = 25;
   final ApiClient _apiClient;
   final AppDriftDatabase _database;
   final TokenStorage _tokenStorage;
@@ -310,10 +311,19 @@ class DynamicRequestRepositoryImpl implements DynamicRequestRepository {
       tenantId: session.tenantId,
       userId: session.userId,
       now: DateTime.now().toUtc(),
+      limit: _syncBatchLimit,
+      dynamicOnly: true,
     );
 
     for (final row in pendingRows) {
       if (!row.requestType.startsWith('dynamic:')) continue;
+
+      final currentSession = await _tokenStorage.getSession();
+      if (currentSession == null ||
+          currentSession.tenantId != session.tenantId ||
+          currentSession.userId != session.userId) {
+        return;
+      }
 
       if (row.retryCount >= 5) {
         await _database.updateRequestStatus(
@@ -342,7 +352,11 @@ class DynamicRequestRepositoryImpl implements DynamicRequestRepository {
           values: values,
         );
 
-        final res = await _apiClient.createDynamicRequest(createDto.toJson());
+        final res = await _apiClient.createDynamicRequest(
+          createDto.toJson(),
+          expectedTenantId: session.tenantId,
+          expectedUserId: session.userId,
+        );
         final entity = DynamicRequestEntity.fromJson(res);
 
         await _database.updateRequestStatus(
@@ -351,6 +365,8 @@ class DynamicRequestRepositoryImpl implements DynamicRequestRepository {
           requestId: row.id,
           status: entity.state,
         );
+      } on SessionIdentityChangedException {
+        return;
       } on ApiException catch (e) {
         if (e.statusCode == 409) {
           await _database.updateRequestStatus(

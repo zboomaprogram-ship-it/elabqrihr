@@ -13,6 +13,7 @@ import 'package:attend_mobile/core/design_system/app_strings_ar.dart';
 import 'package:attend_mobile/core/localization/language_cubit.dart';
 import 'package:attend_mobile/core/design_system/app_theme.dart';
 import 'package:attend_mobile/core/location/location_service.dart';
+import 'package:attend_mobile/core/network/background_sync_coordinator.dart';
 import 'package:attend_mobile/core/trust/trust_ports.dart';
 import 'package:attend_mobile/features/attendance/data/attendance_repository_impl.dart';
 import 'package:attend_mobile/features/attendance/data/attendance_sync_coordinator.dart';
@@ -68,6 +69,9 @@ import 'package:attend_mobile/features/mobile_controls/domain/mobile_controls_re
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:attend_mobile/features/notifications/data/qa_push_notification_service.dart';
+
+export 'package:attend_mobile/core/network/headless_background_sync.dart'
+    show attendBackgroundSyncEntrypoint;
 
 String resolveDefaultApiBaseUrl() {
   const envUrl = String.fromEnvironment('API_BASE_URL');
@@ -188,6 +192,11 @@ void main() async {
   final dynamicSyncCoordinator = DynamicRequestSyncCoordinator(
     repository: dynamicRequestRepository,
   );
+  final backgroundSyncCoordinator = BackgroundSyncCoordinator(
+    attendanceRepository: attendanceRepository,
+    requestRepository: requestRepository,
+    dynamicRequestRepository: dynamicRequestRepository,
+  );
 
   final notificationRepository = NotificationRepositoryImpl(
     apiClient: apiClient,
@@ -200,6 +209,12 @@ void main() async {
     } catch (_) {}
   };
   apiClient.onSessionInvalidated = (session) async {
+    try {
+      await backgroundSyncCoordinator.onSessionRevoked(
+        tenantId: session.tenantId,
+        userId: session.userId,
+      );
+    } catch (_) {}
     await outbox.clearIdentity(
       tenantId: session.tenantId,
       userId: session.userId,
@@ -242,6 +257,7 @@ void main() async {
     authRepository: authRepository,
     attendanceRepository: attendanceRepository,
     attendanceSyncCoordinator: attendanceSyncCoordinator,
+    backgroundSyncCoordinator: backgroundSyncCoordinator,
     installationIdentity: attendanceTrustBridge,
     requestRepository: requestRepository,
     profileRepository: profileRepository,
@@ -270,6 +286,7 @@ class AttendApp extends StatelessWidget {
   final AuthRepository? authRepository;
   final AttendanceRepository? attendanceRepository;
   final AttendanceSyncCoordinator? attendanceSyncCoordinator;
+  final BackgroundSyncCoordinator? backgroundSyncCoordinator;
   final InstallationIdentityPort? installationIdentity;
   final RequestRepository? requestRepository;
   final ProfileRepository profileRepository;
@@ -299,6 +316,7 @@ class AttendApp extends StatelessWidget {
     this.authRepository,
     this.attendanceRepository,
     this.attendanceSyncCoordinator,
+    this.backgroundSyncCoordinator,
     this.installationIdentity,
     this.requestRepository,
     required this.profileRepository,
@@ -430,6 +448,7 @@ class AttendApp extends StatelessWidget {
               final cubit = AuthCubit(
                 effectiveAuth,
                 installationIdentity: installationIdentity,
+                backgroundSyncCoordinator: backgroundSyncCoordinator,
               );
               effectiveApiClient.onSessionExpired = () => cubit.expireSession();
               return cubit..checkSession();

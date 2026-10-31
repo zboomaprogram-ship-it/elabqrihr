@@ -39,15 +39,7 @@ final class ProductionTrustTests: XCTestCase {
         ]
 
         var genError: Unmanaged<CFError>?
-        var privateKeyOpt = SecKeyCreateRandomKey(attributes as CFDictionary, &genError)
-        if privateKeyOpt == nil {
-            let fallbackAttributes: [String: Any] = [
-                kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-                kSecAttrKeySizeInBits as String: 256
-            ]
-            privateKeyOpt = SecKeyCreateRandomKey(fallbackAttributes as CFDictionary, nil)
-        }
-        guard let privateKey = privateKeyOpt else {
+        guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &genError) else {
             XCTFail("SecKeyCreateRandomKey failed: \(String(describing: genError))")
             return
         }
@@ -73,7 +65,7 @@ final class ProductionTrustTests: XCTestCase {
         var signError: Unmanaged<CFError>?
         guard let signature = SecKeyCreateSignature(
             privateKey,
-            .ecdsaSignatureDigestX962SHA256,
+            .ecdsaSignatureMessageX962SHA256,
             digestData as CFData,
             &signError
         ) as Data? else {
@@ -87,7 +79,7 @@ final class ProductionTrustTests: XCTestCase {
         var verifyError: Unmanaged<CFError>?
         let isValid = SecKeyVerifySignature(
             publicKey,
-            .ecdsaSignatureDigestX962SHA256,
+            .ecdsaSignatureMessageX962SHA256,
             digestData as CFData,
             signature as CFData,
             &verifyError
@@ -104,16 +96,16 @@ final class ProductionTrustTests: XCTestCase {
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: tagData,
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
             kSecReturnRef as String: true
         ]
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        var key: SecKey?
-
+        let key: SecKey
         if status == errSecSuccess, let existing = item {
-            key = (existing as! SecKey)
-        } else {
+            key = try XCTUnwrap(existing as? SecKey)
+        } else if status == errSecItemNotFound {
             let attributes: [String: Any] = [
                 kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
                 kSecAttrKeySizeInBits as String: 256,
@@ -122,22 +114,20 @@ final class ProductionTrustTests: XCTestCase {
                     kSecAttrApplicationTag as String: tagData
                 ]
             ]
-            key = SecKeyCreateRandomKey(attributes as CFDictionary, nil)
+            guard let created = SecKeyCreateRandomKey(attributes as CFDictionary, nil) else {
+                XCTFail("Persistent Keychain key creation failed")
+                return
+            }
+            key = created
+        } else {
+            XCTFail("Persistent Keychain lookup failed with status \(status)")
+            return
         }
 
-        if key == nil {
-            let fallbackAttributes: [String: Any] = [
-                kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-                kSecAttrKeySizeInBits as String: 256
-            ]
-            key = SecKeyCreateRandomKey(fallbackAttributes as CFDictionary, nil)
-        }
-
-        XCTAssertNotNil(key)
-        let publicKey = SecKeyCopyPublicKey(key!)!
+        let publicKey = try XCTUnwrap(SecKeyCopyPublicKey(key))
         let keyData = SecKeyCopyExternalRepresentation(publicKey, nil)! as Data
-
-        let thumbprint = SHA256.hash(data: keyData).map { String(format: "%02x", $0) }.joined()
+        let spki = try P256.Signing.PublicKey(x963Representation: keyData).derRepresentation
+        let thumbprint = SHA256.hash(data: spki).map { String(format: "%02x", $0) }.joined()
 
         XCTAssertEqual(thumbprint.count, 64, "SHA-256 thumbprint must be exactly 64 hex characters")
         XCTAssertNotNil(thumbprint.range(of: "^[a-f0-9]{64}$", options: .regularExpression))

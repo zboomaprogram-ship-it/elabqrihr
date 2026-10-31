@@ -57,6 +57,20 @@ class SqliteAttendanceOutbox implements LocalAttendanceOutbox {
         PRAGMA user_version = 1;
       ''');
     }
+    if (currentVersion < 2) {
+      _db.execute(
+          'ALTER TABLE local_attendance_events ADD COLUMN location_captured_at TEXT');
+      _db.execute('PRAGMA user_version = 2');
+    }
+    if (currentVersion < 3) {
+      _db.execute(
+          'ALTER TABLE local_attendance_events ADD COLUMN proof_installation_id TEXT');
+      _db.execute(
+          'ALTER TABLE local_attendance_events ADD COLUMN proof_digest TEXT');
+      _db.execute(
+          'ALTER TABLE local_attendance_events ADD COLUMN proof_signature TEXT');
+      _db.execute('PRAGMA user_version = 3');
+    }
   }
 
   @override
@@ -68,9 +82,10 @@ class SqliteAttendanceOutbox implements LocalAttendanceOutbox {
     final stmt = _db.prepare('''
       INSERT INTO local_attendance_events (
         id, tenant_id, user_id, shift_instance_id, event_type,
-        captured_at, latitude, longitude, accuracy_meters,
+        captured_at, latitude, longitude, accuracy_meters, location_captured_at,
+        proof_installation_id, proof_digest, proof_signature,
         device_id, sync_status, reason_code, retry_count, next_retry_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)
       ON CONFLICT(id) DO UPDATE SET
         sync_status = excluded.sync_status,
         reason_code = excluded.reason_code
@@ -86,6 +101,10 @@ class SqliteAttendanceOutbox implements LocalAttendanceOutbox {
       event.location.latitude,
       event.location.longitude,
       event.location.accuracyMeters,
+      event.location.timestamp?.toUtc().toIso8601String(),
+      event.captureProof?.installationId,
+      event.captureProof?.digest,
+      event.captureProof?.signature,
       event.deviceId,
       AttendanceValidationStatus.pendingSync.toApiValue(),
       event.reasonCode,
@@ -99,12 +118,19 @@ class SqliteAttendanceOutbox implements LocalAttendanceOutbox {
   Future<List<AttendanceEventEntity>> getPendingEvents({
     required String tenantId,
     required String userId,
+    int? limit,
   }) async {
+    if (limit != null && limit <= 0) {
+      throw ArgumentError.value(limit, 'limit', 'must be greater than zero');
+    }
+    final suffix = limit == null ? '' : ' LIMIT ?';
+    final parameters = <Object?>[tenantId, userId];
+    if (limit != null) parameters.add(limit);
     final ResultSet result = _db.select('''
       SELECT * FROM local_attendance_events
       WHERE tenant_id = ? AND user_id = ? AND sync_status = 'pending_sync'
       ORDER BY captured_at ASC
-    ''', [tenantId, userId]);
+    $suffix''', parameters);
 
     return result.map((row) => _rowToEntity(row)).toList();
   }
@@ -162,9 +188,20 @@ class SqliteAttendanceOutbox implements LocalAttendanceOutbox {
         latitude: (row['latitude'] as num).toDouble(),
         longitude: (row['longitude'] as num).toDouble(),
         accuracyMeters: (row['accuracy_meters'] as num?)?.toDouble(),
+        timestamp: row['location_captured_at'] == null
+            ? null
+            : DateTime.parse(row['location_captured_at'] as String),
       ),
       shiftInstanceId: row['shift_instance_id'] as String,
       deviceId: row['device_id'] as String?,
+      captureProof: row['proof_installation_id'] == null ||
+              row['proof_digest'] == null ||
+              row['proof_signature'] == null
+          ? null
+          : OfflineAttendanceProof(
+              installationId: row['proof_installation_id'] as String,
+              digest: row['proof_digest'] as String,
+              signature: row['proof_signature'] as String),
       status: AttendanceValidationStatusX.fromApiValue(
           row['sync_status'] as String),
       reasonCode: row['reason_code'] as String?,

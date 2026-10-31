@@ -4,10 +4,14 @@ import 'package:attend_mobile/core/network/background_sync_coordinator.dart';
 import 'package:attend_mobile/core/trust/trust_ports.dart';
 import 'package:attend_mobile/features/attendance/domain/attendance_repository.dart';
 import 'package:attend_mobile/features/requests/domain/request_repository.dart';
+import 'package:attend_mobile/features/dynamic_requests/domain/dynamic_request_repository.dart';
 
 class MockAttendanceRepository extends Mock implements AttendanceRepository {}
 
 class MockRequestRepository extends Mock implements RequestRepository {}
+
+class MockDynamicRequestRepository extends Mock
+    implements DynamicRequestRepository {}
 
 class MockBackgroundSyncScheduler extends Mock
     implements BackgroundSyncScheduler {}
@@ -15,17 +19,20 @@ class MockBackgroundSyncScheduler extends Mock
 void main() {
   late MockAttendanceRepository attendanceRepo;
   late MockRequestRepository requestRepo;
+  late MockDynamicRequestRepository dynamicRepo;
   late MockBackgroundSyncScheduler scheduler;
   late BackgroundSyncCoordinator coordinator;
 
   setUp(() {
     attendanceRepo = MockAttendanceRepository();
     requestRepo = MockRequestRepository();
+    dynamicRepo = MockDynamicRequestRepository();
     scheduler = MockBackgroundSyncScheduler();
 
     coordinator = BackgroundSyncCoordinator(
       attendanceRepository: attendanceRepo,
       requestRepository: requestRepo,
+      dynamicRequestRepository: dynamicRepo,
       scheduler: scheduler,
     );
   });
@@ -36,11 +43,13 @@ void main() {
         () async {
       when(() => attendanceRepo.synchronizeOutbox()).thenAnswer((_) async {});
       when(() => requestRepo.synchronizeOutbox()).thenAnswer((_) async {});
+      when(() => dynamicRepo.synchronizeOutbox()).thenAnswer((_) async {});
 
       await coordinator.synchronizeAll();
 
       verify(() => attendanceRepo.synchronizeOutbox()).called(1);
       verify(() => requestRepo.synchronizeOutbox()).called(1);
+      verify(() => dynamicRepo.synchronizeOutbox()).called(1);
     });
 
     test('concurrent synchronizeAll calls are deduplicated (re-entrant guard)',
@@ -51,6 +60,7 @@ void main() {
         await Future.delayed(const Duration(milliseconds: 50));
       });
       when(() => requestRepo.synchronizeOutbox()).thenAnswer((_) async {});
+      when(() => dynamicRepo.synchronizeOutbox()).thenAnswer((_) async {});
 
       // Launch two concurrent synchronizations
       final future1 = coordinator.synchronizeAll();

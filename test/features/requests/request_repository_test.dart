@@ -79,7 +79,11 @@ void main() {
     expect(row!.syncStatus, 'pending_sync');
     expect(row.retryCount, 0);
     expect(row.nextRetryAt, isNull);
-    verifyNever(() => mockApiClient.submitRequest(any()));
+    verifyNever(() => mockApiClient.submitRequest(
+          any(),
+          expectedTenantId: any(named: 'expectedTenantId'),
+          expectedUserId: any(named: 'expectedUserId'),
+        ));
   });
 
   test('offline dynamic request preserves its identity and display name',
@@ -289,7 +293,11 @@ void main() {
       when(() => mockTokenStorage.getSession())
           .thenAnswer((_) async => sessionUser1);
 
-      when(() => mockApiClient.submitRequest(any())).thenThrow(ApiException(
+      when(() => mockApiClient.submitRequest(
+            any(),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
+          )).thenThrow(ApiException(
         statusCode: 422,
         message: 'Invalid date interval',
         code: 'INVALID_INTERVAL',
@@ -323,7 +331,11 @@ void main() {
         () async {
       when(() => mockTokenStorage.getSession())
           .thenAnswer((_) async => sessionUser1);
-      when(() => mockApiClient.submitRequest(any())).thenThrow(ApiException(
+      when(() => mockApiClient.submitRequest(
+            any(),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
+          )).thenThrow(ApiException(
         statusCode: 409,
         message: 'No eligible reviewer is available',
         code: 'APPROVAL_ROUTE_UNAVAILABLE',
@@ -350,12 +362,48 @@ void main() {
   });
 
   group('Identity Isolation & Session Switching', () {
+    test('identity change during replay leaves the queued row untouched',
+        () async {
+      when(() => mockTokenStorage.getSession())
+          .thenAnswer((_) async => sessionUser1);
+      await database.saveRequest(
+        tenantId: sessionUser1.tenantId,
+        userId: sessionUser1.userId,
+        id: 'req-identity-bound-replay',
+        requestType: 'leave',
+        payloadJson: jsonEncode({'reason': 'Synthetic'}),
+        syncStatus: 'pending_sync',
+      );
+      when(() => mockApiClient.submitRequest(
+            any(),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
+          )).thenThrow(const SessionIdentityChangedException());
+
+      await expectLater(
+        repository.synchronizeOutbox(),
+        throwsA(isA<SessionIdentityChangedException>()),
+      );
+
+      final row = await database.getRequestEntry(
+        tenantId: sessionUser1.tenantId,
+        userId: sessionUser1.userId,
+        requestId: 'req-identity-bound-replay',
+      );
+      expect(row!.syncStatus, 'pending_sync');
+      expect(row.retryCount, 0);
+      expect(row.nextRetryAt, isNull);
+    });
+
     test('User B cannot see or submit User A outbox requests', () async {
       // 1. User 1 submits offline request
       when(() => mockTokenStorage.getSession())
           .thenAnswer((_) async => sessionUser1);
-      when(() => mockApiClient.submitRequest(any()))
-          .thenThrow(const SocketException('Offline'));
+      when(() => mockApiClient.submitRequest(
+            any(),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
+          )).thenThrow(const SocketException('Offline'));
 
       await repository.submitRequest(
         requestId: 'req-user1-offline',
@@ -385,13 +433,21 @@ void main() {
 
       // User 2 synchronizeOutbox submits 0 requests
       await repository.synchronizeOutbox();
-      verifyNever(() => mockApiClient.submitRequest(any()));
+      verifyNever(() => mockApiClient.submitRequest(
+            any(),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
+          ));
 
       // 3. User logs out (session == null)
       when(() => mockTokenStorage.getSession()).thenAnswer((_) async => null);
 
       await repository.synchronizeOutbox();
-      verifyNever(() => mockApiClient.submitRequest(any()));
+      verifyNever(() => mockApiClient.submitRequest(
+            any(),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
+          ));
     });
   });
 }

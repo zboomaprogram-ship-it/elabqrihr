@@ -33,7 +33,7 @@ extension AttendanceRepositoryLocationX on AttendanceRepository {
   Future<GeoPoint> captureCurrentLocation() async {
     final self = this;
     if (self is HasCurrentLocationCapture) {
-      return self.captureCurrentLocation();
+      return (self as HasCurrentLocationCapture).captureCurrentLocation();
     }
     final context = await getCurrentShiftContext();
     return context.branchLocation;

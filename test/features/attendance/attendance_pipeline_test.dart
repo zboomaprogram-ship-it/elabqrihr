@@ -109,13 +109,14 @@ void main() {
     displayName: 'Test Employee',
   );
 
-  const testLocation = GeoPoint(
-    latitude: 31.0409,
-    longitude: 31.3785,
-    accuracyMeters: 12.0,
-  );
+  late GeoPoint testLocation;
 
   setUp(() {
+    testLocation = GeoPoint(
+        latitude: 31.0409,
+        longitude: 31.3785,
+        accuracyMeters: 12.0,
+        timestamp: DateTime.now().toUtc());
     mockApiClient = MockApiClient();
     mockLocationService = MockLocationService();
     mockEvidenceService = MockAttendanceEvidenceService();
@@ -143,7 +144,78 @@ void main() {
   });
 
   group('Attendance Submission Pipeline Failure Modes & Outbox Invariants', () {
-    test('1. granted location + integrity unavailable: terminal rejection, 0 outbox pending rows',
+    test('offline before challenge retains a pending attendance event',
+        () async {
+      when(() => mockEvidenceService.prepare(any())).thenThrow(
+        AttendanceSubmissionStageException(
+          stage: AttendanceSubmissionStage.integrityChallenge,
+          causalError: const SocketException('offline'),
+        ),
+      );
+      when(() => mockEvidenceService.captureForOffline(any())).thenAnswer(
+        (_) async => const OfflineAttendanceProof(
+            installationId: 'inst',
+            digest: 'digest',
+            signature: 'capture-signature'),
+      );
+      final result = await repository.submitAttendanceEvent(
+        eventType: AttendanceEventType.checkIn,
+        shiftInstanceId: 'shift-101',
+        location: testLocation,
+      );
+      expect(result.status, AttendanceValidationStatus.pendingSync);
+      final pending = await outbox.getPendingEvents(
+        tenantId: testSession.tenantId,
+        userId: testSession.userId,
+      );
+      expect(pending, hasLength(1));
+      expect(pending.single.captureProof?.signature, 'capture-signature');
+    });
+    test('missing location capture time is not invented for a new event',
+        () async {
+      const missingTime = GeoPoint(latitude: 31, longitude: 31);
+      when(() => mockLocationService.getCurrentLocation())
+          .thenAnswer((_) async => missingTime);
+      await expectLater(
+        repository.submitAttendanceEvent(
+          eventType: AttendanceEventType.checkIn,
+          shiftInstanceId: 'shift-101',
+          location: missingTime,
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
+    });
+    test('legacy queued event without capture proof is never sent unsigned',
+        () async {
+      final legacy = AttendanceEventEntity(
+          id: 'legacy-event',
+          eventType: AttendanceEventType.checkIn,
+          capturedAt: DateTime.now().toUtc(),
+          location: testLocation,
+          shiftInstanceId: 'shift-101',
+          status: AttendanceValidationStatus.pendingSync);
+      await outbox.saveEvent(
+          tenantId: testSession.tenantId,
+          userId: testSession.userId,
+          event: legacy);
+      await repository.synchronizeOutbox();
+      verifyNever(() => mockEvidenceService.prepareReplay(any()));
+      verifyNever(() => mockApiClient.submitAttendanceEvent(
+          eventId: any(named: 'eventId'),
+          eventType: any(named: 'eventType'),
+          shiftInstanceId: any(named: 'shiftInstanceId'),
+          location: any(named: 'location'),
+          capturedAt: any(named: 'capturedAt'),
+          evidence: any(named: 'evidence'),
+          expectedTenantId: any(named: 'expectedTenantId'),
+          expectedUserId: any(named: 'expectedUserId')));
+      expect(
+          await outbox.getPendingEvents(
+              tenantId: testSession.tenantId, userId: testSession.userId),
+          isEmpty);
+    });
+    test(
+        '1. granted location + integrity unavailable: terminal rejection, 0 outbox pending rows',
         () async {
       when(() => mockEvidenceService.prepare(any())).thenThrow(
         const AttendanceSubmissionStageException(
@@ -170,7 +242,8 @@ void main() {
           reason: 'Trust failures must never be persisted as pendingSync');
     });
 
-    test('2. wrapped DioException.unknown with non-transport cause: terminal rejection, 0 outbox pending rows',
+    test(
+        '2. wrapped DioException.unknown with non-transport cause: terminal rejection, 0 outbox pending rows',
         () async {
       when(() => mockEvidenceService.prepare(any())).thenAnswer(
         (_) async => const AttendanceEvidenceDto(
@@ -189,6 +262,8 @@ void main() {
             location: any(named: 'location'),
             capturedAt: any(named: 'capturedAt'),
             evidence: any(named: 'evidence'),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
           )).thenThrow(
         DioException(
           requestOptions: RequestOptions(path: '/attendance'),
@@ -211,10 +286,12 @@ void main() {
         userId: testSession.userId,
       );
       expect(pending, isEmpty,
-          reason: 'Non-transport unknown exceptions must never be stored in outbox');
+          reason:
+              'Non-transport unknown exceptions must never be stored in outbox');
     });
 
-    test('3. device-installation registration failure: terminal rejection, 0 outbox pending rows',
+    test(
+        '3. device-installation registration failure: terminal rejection, 0 outbox pending rows',
         () async {
       when(() => mockEvidenceService.prepare(any())).thenThrow(
         AttendanceSubmissionStageException(
@@ -238,10 +315,12 @@ void main() {
         userId: testSession.userId,
       );
       expect(pending, isEmpty,
-          reason: 'Registration failures must never be persisted as pendingSync');
+          reason:
+              'Registration failures must never be persisted as pendingSync');
     });
 
-    test('4. server rejection (e.g. 403 or geofence policy): terminal rejection, 0 outbox pending rows',
+    test(
+        '4. server rejection (e.g. 403 or geofence policy): terminal rejection, 0 outbox pending rows',
         () async {
       when(() => mockEvidenceService.prepare(any())).thenAnswer(
         (_) async => const AttendanceEvidenceDto(
@@ -260,6 +339,8 @@ void main() {
             location: any(named: 'location'),
             capturedAt: any(named: 'capturedAt'),
             evidence: any(named: 'evidence'),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
           )).thenThrow(
         const ApiException(
           statusCode: 403,
@@ -285,7 +366,8 @@ void main() {
           reason: 'Server policy rejections must never remain in outbox');
     });
 
-    test('5. genuine offline timeout/connection error: retryable, exactly 1 outbox pending row',
+    test(
+        '5. genuine offline timeout/connection error: retryable, exactly 1 outbox pending row',
         () async {
       when(() => mockEvidenceService.prepare(any())).thenAnswer(
         (_) async => const AttendanceEvidenceDto(
@@ -304,6 +386,8 @@ void main() {
             location: any(named: 'location'),
             capturedAt: any(named: 'capturedAt'),
             evidence: any(named: 'evidence'),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
           )).thenThrow(
         DioException(
           requestOptions: RequestOptions(path: '/attendance'),
@@ -326,11 +410,21 @@ void main() {
       );
       expect(pending.length, equals(1));
       expect(pending.first.shiftInstanceId, equals('shift-101'));
-      expect(pending.first.status, equals(AttendanceValidationStatus.pendingSync));
+      expect(
+          pending.first.status, equals(AttendanceValidationStatus.pendingSync));
     });
 
-    test('6. retry after genuine network recovery: synchronizes and clears pendingSync status',
+    test(
+        '6. retry after genuine network recovery: synchronizes and clears pendingSync status',
         () async {
+      when(() => mockEvidenceService.prepareReplay(any())).thenAnswer(
+        (_) async => const AttendanceEvidenceDto(
+            contentDigest: 'digest-1',
+            installationId: 'inst-1',
+            challengeId: 'new-challenge',
+            signature: 'sig-1',
+            integrityToken: 'fresh-token'),
+      );
       when(() => mockEvidenceService.prepare(any())).thenAnswer(
         (_) async => const AttendanceEvidenceDto(
           contentDigest: 'digest-1',
@@ -349,6 +443,8 @@ void main() {
             location: any(named: 'location'),
             capturedAt: any(named: 'capturedAt'),
             evidence: any(named: 'evidence'),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
           )).thenThrow(
         const SocketException('Failed host lookup'),
       );
@@ -368,6 +464,8 @@ void main() {
             location: any(named: 'location'),
             capturedAt: any(named: 'capturedAt'),
             evidence: any(named: 'evidence'),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
           )).thenAnswer(
         (_) async => AttendanceEventEntity(
           id: initial.id,
@@ -390,12 +488,83 @@ void main() {
 
       await repository.synchronizeOutbox();
 
+      final replayed =
+          verify(() => mockEvidenceService.prepareReplay(captureAny()))
+              .captured
+              .single as AttendanceEventEntity;
+      expect(replayed.captureProof?.signature, 'sig-1');
+      verify(() => mockApiClient.submitAttendanceEvent(
+            eventId: initial.id,
+            eventType: initial.eventType,
+            shiftInstanceId: initial.shiftInstanceId,
+            location: any(named: 'location'),
+            capturedAt: any(named: 'capturedAt'),
+            evidence: any(named: 'evidence'),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
+          )).called(2); // Original send and exactly one replay.
+
       final remaining = await outbox.getPendingEvents(
         tenantId: testSession.tenantId,
         userId: testSession.userId,
       );
       expect(remaining, isEmpty,
           reason: 'Synchronized event transitions out of pendingSync status');
+    });
+
+    test('identity change during replay leaves signed attendance row untouched',
+        () async {
+      final event = AttendanceEventEntity(
+        id: 'event-identity-bound-replay',
+        eventType: AttendanceEventType.checkIn,
+        capturedAt: DateTime.utc(2026, 10, 29, 8),
+        location: testLocation,
+        shiftInstanceId: 'shift-101',
+        status: AttendanceValidationStatus.pendingSync,
+        captureProof: const OfflineAttendanceProof(
+          installationId: 'installation-1',
+          digest: 'digest-1',
+          signature: 'capture-signature',
+        ),
+      );
+      await outbox.saveEvent(
+        tenantId: testSession.tenantId,
+        userId: testSession.userId,
+        event: event,
+      );
+      when(() => mockEvidenceService.prepareReplay(any())).thenAnswer(
+        (_) async => const AttendanceEvidenceDto(
+          contentDigest: 'digest-1',
+          installationId: 'installation-1',
+          challengeId: 'challenge-1',
+          signature: 'capture-signature',
+          integrityToken: 'fresh-token',
+        ),
+      );
+      when(() => mockApiClient.submitAttendanceEvent(
+            eventId: any(named: 'eventId'),
+            eventType: any(named: 'eventType'),
+            shiftInstanceId: any(named: 'shiftInstanceId'),
+            location: any(named: 'location'),
+            capturedAt: any(named: 'capturedAt'),
+            evidence: any(named: 'evidence'),
+            expectedTenantId: testSession.tenantId,
+            expectedUserId: testSession.userId,
+          )).thenThrow(const SessionIdentityChangedException());
+
+      await expectLater(
+        repository.synchronizeOutbox(),
+        throwsA(isA<SessionIdentityChangedException>()),
+      );
+
+      final stillPending = await outbox.getPendingEvents(
+        tenantId: testSession.tenantId,
+        userId: testSession.userId,
+      );
+      expect(stillPending.single.id, event.id);
+      expect(
+          stillPending.single.status, AttendanceValidationStatus.pendingSync);
+      expect(stillPending.single.captureProof?.signature, 'capture-signature');
     });
 
     test(
@@ -420,6 +589,8 @@ void main() {
             location: any(named: 'location'),
             capturedAt: any(named: 'capturedAt'),
             evidence: any(named: 'evidence'),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
           )).thenThrow(
         const ApiException(
           statusCode: 422,
@@ -538,7 +709,8 @@ void main() {
         ),
         isNull,
       );
-      verify(() => mockInstallationIdentity.revokeLocalInstallation()).called(1);
+      verify(() => mockInstallationIdentity.revokeLocalInstallation())
+          .called(1);
 
       // 3. New attendance attempt invokes AttendanceEvidenceService
       final evidenceService = AttendanceEvidenceService(
@@ -596,8 +768,7 @@ void main() {
         ),
       );
 
-      final registeredId =
-          await evidenceService.ensureRegisteredInstallation();
+      final registeredId = await evidenceService.ensureRegisteredInstallation();
 
       expect(registeredId, equals(freshInstallationId));
       expect(registeredId, isNot(equals(revokedInstallationId)));
@@ -765,7 +936,8 @@ void main() {
         throwsA(
           isA<AttendanceSubmissionStageException>()
               .having((e) => e.reasonCode, 'reasonCode', 'PLAY_NONCE_MISMATCH')
-              .having((e) => e.stage, 'stage', AttendanceSubmissionStage.installationRegistration),
+              .having((e) => e.stage, 'stage',
+                  AttendanceSubmissionStage.installationRegistration),
         ),
       );
 
@@ -799,8 +971,7 @@ void main() {
         ),
       );
 
-      final secondResult =
-          await evidenceService.ensureRegisteredInstallation();
+      final secondResult = await evidenceService.ensureRegisteredInstallation();
       expect(secondResult, equals('inst-clean-active'));
 
       final storedAfterSuccess =
@@ -846,7 +1017,8 @@ void main() {
         userId: testSession.userId,
       );
       expect(pending, isEmpty,
-          reason: 'PLAY_NONCE_MISMATCH must never be queued into offline outbox');
+          reason:
+              'PLAY_NONCE_MISMATCH must never be queued into offline outbox');
     });
 
     test(
@@ -869,6 +1041,8 @@ void main() {
             location: any(named: 'location'),
             capturedAt: any(named: 'capturedAt'),
             evidence: any(named: 'evidence'),
+            expectedTenantId: any(named: 'expectedTenantId'),
+            expectedUserId: any(named: 'expectedUserId'),
           )).thenThrow(
         const ApiException(
           statusCode: 503,
@@ -898,8 +1072,8 @@ void main() {
         userId: testSession.userId,
       );
       expect(pending, isEmpty,
-          reason: 'MOBILE_ACTION_RESTRICTED must never be queued into offline outbox');
+          reason:
+              'MOBILE_ACTION_RESTRICTED must never be queued into offline outbox');
     });
   });
 }
-

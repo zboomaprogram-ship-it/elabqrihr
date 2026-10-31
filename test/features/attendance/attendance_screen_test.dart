@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:attend_mobile/core/design_system/widgets/checkin_radar_button.dart';
 import 'package:attend_mobile/core/design_system/app_strings_ar.dart';
 import 'package:attend_mobile/core/design_system/app_theme.dart';
+import 'package:attend_mobile/core/errors/app_failure.dart';
 import 'package:attend_mobile/features/attendance/domain/attendance_models.dart';
 import 'package:attend_mobile/features/attendance/domain/attendance_repository.dart';
 import 'package:attend_mobile/features/attendance/presentation/cubit/attendance_cubit.dart';
@@ -212,6 +214,74 @@ void main() {
   );
 
   group('AttendanceScreen UI States (T031, T035)', () {
+    testWidgets('server completed state disables attendance action',
+        (tester) async {
+      final repo = MockAttendanceRepository(
+          stubbedContext: baseShift.copyWith(isCompleted: true));
+      final cubit = AttendanceCubit(repo);
+      await tester.pumpWidget(createTestApp(cubit));
+      await cubit.loadShiftContext();
+      await tester.pumpAndSettle();
+      expect(find.text('اكتملت الوردية'), findsOneWidget);
+      expect(find.text(AppStringsAr.checkIn), findsNothing);
+      expect(
+          tester
+              .widget<CheckInRadarButton>(find.byType(CheckInRadarButton))
+              .disabled,
+          isTrue);
+    });
+
+    testWidgets(
+        'current server shift stays actionable after another shift checkout',
+        (tester) async {
+      final checkout = AttendanceEventEntity(
+        id: 'previous-event',
+        eventType: AttendanceEventType.checkOut,
+        capturedAt: DateTime.utc(2026, 9, 20),
+        location: const GeoPoint(latitude: 30, longitude: 31),
+        shiftInstanceId: 'previous-shift',
+        status: AttendanceValidationStatus.accepted,
+      );
+      final repo = MockAttendanceRepository(
+          stubbedContext: baseShift.copyWith(lastEvent: checkout));
+      final cubit = AttendanceCubit(repo);
+      await tester.pumpWidget(createTestApp(cubit));
+      await cubit.loadShiftContext();
+      await tester.pumpAndSettle();
+      expect(find.text(AppStringsAr.checkIn), findsOneWidget);
+      expect(find.text('اكتملت الوردية'), findsNothing);
+    });
+
+    testWidgets('accepted event reason does not render a rejection banner',
+        (tester) async {
+      final acceptedCheckIn = AttendanceEventEntity(
+        id: 'accepted-event',
+        eventType: AttendanceEventType.checkIn,
+        capturedAt: DateTime.utc(2026, 9, 20, 8, 0),
+        location: const GeoPoint(latitude: 30.0444, longitude: 31.2357),
+        shiftInstanceId: 'shift-100',
+        status: AttendanceValidationStatus.accepted,
+        reasonCode: 'ACCEPTED',
+      );
+      final repo = MockAttendanceRepository(
+        stubbedContext: baseShift.copyWith(
+          isCheckedIn: true,
+          lastEvent: acceptedCheckIn,
+        ),
+      );
+      final cubit = AttendanceCubit(repo);
+
+      await tester.pumpWidget(createTestApp(cubit));
+      await cubit.loadShiftContext();
+      await tester.pumpAndSettle();
+
+      expect(find.text(AppStringsAr.statusPresent), findsOneWidget);
+      expect(
+        find.text(AppFailureMapper.attendanceReasonMessage('ACCEPTED')),
+        findsNothing,
+      );
+    });
+
     testWidgets('Renders Arabic RTL current shift card and check-in action',
         (tester) async {
       final repo = MockAttendanceRepository(stubbedContext: baseShift);

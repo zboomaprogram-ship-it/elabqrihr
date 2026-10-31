@@ -31,6 +31,10 @@ void main() {
         location: const GeoPoint(
             latitude: 30.0444, longitude: 31.2357, accuracyMeters: 12.0),
         shiftInstanceId: 'shift-123',
+        captureProof: const OfflineAttendanceProof(
+            installationId: 'test-installation',
+            digest: 'test-digest',
+            signature: 'test-signature'),
         status: AttendanceValidationStatus.pendingSync,
       );
 
@@ -47,6 +51,8 @@ void main() {
       expect(restored.first.id, equals('evt-persist-1'));
       expect(restored.first.location.latitude, equals(30.0444));
       expect(restored.first.location.accuracyMeters, equals(12.0));
+      expect(restored.first.captureProof?.signature, 'test-signature');
+      expect(restored.first.captureProof?.digest, 'test-digest');
       outbox2.close();
     });
 
@@ -145,6 +151,46 @@ void main() {
       expect(remaining.length, equals(1));
       expect(remaining.first.id, equals('evt-later'));
 
+      outbox.close();
+    });
+
+    test('pending attendance query can return a FIFO bounded batch', () async {
+      final outbox = SqliteAttendanceOutbox.inMemory();
+      for (var i = 0; i < 3; i++) {
+        await outbox.saveEvent(
+          tenantId: 'alpha',
+          userId: 'user-1',
+          event: AttendanceEventEntity(
+            id: 'evt-$i',
+            eventType: AttendanceEventType.checkIn,
+            capturedAt: DateTime.utc(2026, 9, 20, 8 + i),
+            location: const GeoPoint(latitude: 30, longitude: 31),
+            shiftInstanceId: 'shift-1',
+            status: AttendanceValidationStatus.pendingSync,
+          ),
+        );
+      }
+      final batch = await outbox.getPendingEvents(
+        tenantId: 'alpha',
+        userId: 'user-1',
+        limit: 2,
+      );
+      expect(batch.map((event) => event.id), ['evt-0', 'evt-1']);
+      outbox.close();
+    });
+
+    test('pending attendance query rejects non-positive limits', () async {
+      final outbox = SqliteAttendanceOutbox.inMemory();
+      for (final limit in [0, -1]) {
+        expect(
+          outbox.getPendingEvents(
+            tenantId: 'alpha',
+            userId: 'user-1',
+            limit: limit,
+          ),
+          throwsArgumentError,
+        );
+      }
       outbox.close();
     });
 

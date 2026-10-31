@@ -110,6 +110,10 @@ class LocalAttendanceEntries extends Table {
   TextColumn get shiftInstanceId => text()();
   TextColumn get eventType => text()(); // check_in | check_out
   DateTimeColumn get capturedAt => dateTime()();
+  DateTimeColumn get locationCapturedAt => dateTime().nullable()();
+  TextColumn get proofInstallationId => text().nullable()();
+  TextColumn get proofDigest => text().nullable()();
+  TextColumn get proofSignature => text().nullable()();
   RealColumn get latitude => real()();
   RealColumn get longitude => real()();
   RealColumn get accuracyMeters => real().nullable()();
@@ -178,7 +182,7 @@ class AppDriftDatabase extends _$AppDriftDatabase
   }
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -281,6 +285,18 @@ class AppDriftDatabase extends _$AppDriftDatabase
               );
             ''');
           }
+          if (from < 6) {
+            await m.addColumn(localAttendanceEntries,
+                localAttendanceEntries.locationCapturedAt);
+          }
+          if (from < 7) {
+            await m.addColumn(localAttendanceEntries,
+                localAttendanceEntries.proofInstallationId);
+            await m.addColumn(
+                localAttendanceEntries, localAttendanceEntries.proofDigest);
+            await m.addColumn(
+                localAttendanceEntries, localAttendanceEntries.proofSignature);
+          }
         },
       );
 
@@ -312,6 +328,10 @@ class AppDriftDatabase extends _$AppDriftDatabase
         shiftInstanceId: Value(event.shiftInstanceId),
         eventType: Value(event.eventType.toApiValue()),
         capturedAt: Value(event.capturedAt.toUtc()),
+        locationCapturedAt: Value(event.location.timestamp?.toUtc()),
+        proofInstallationId: Value(event.captureProof?.installationId),
+        proofDigest: Value(event.captureProof?.digest),
+        proofSignature: Value(event.captureProof?.signature),
         latitude: Value(event.location.latitude),
         longitude: Value(event.location.longitude),
         accuracyMeters: Value(event.location.accuracyMeters),
@@ -329,7 +349,11 @@ class AppDriftDatabase extends _$AppDriftDatabase
   Future<List<AttendanceEventEntity>> getPendingEvents({
     required String tenantId,
     required String userId,
+    int? limit,
   }) async {
+    if (limit != null && limit <= 0) {
+      throw ArgumentError.value(limit, 'limit', 'must be greater than zero');
+    }
     final now = DateTime.now().toUtc();
     final rows = await (select(localAttendanceEntries)
           ..where((t) =>
@@ -341,7 +365,8 @@ class AppDriftDatabase extends _$AppDriftDatabase
           ..orderBy([
             (t) =>
                 OrderingTerm(expression: t.capturedAt, mode: OrderingMode.asc)
-          ]))
+          ])
+          ..limit(limit ?? 0x7fffffff))
         .get();
 
     return rows.map((r) => _toEntity(r)).toList();
@@ -467,19 +492,30 @@ class AppDriftDatabase extends _$AppDriftDatabase
     required String tenantId,
     required String userId,
     DateTime? now,
+    int? limit,
+    bool? dynamicOnly,
   }) async {
+    if (limit != null && limit <= 0) {
+      throw ArgumentError.value(limit, 'limit', 'must be greater than zero');
+    }
     final currentTime = (now ?? DateTime.now()).toUtc();
-    return (select(localRequestEntries)
-          ..where((t) =>
-              t.tenantId.equals(tenantId) &
-              t.userId.equals(userId) &
-              t.syncStatus.equals('pending_sync') &
-              (t.nextRetryAt.isNull() |
-                  t.nextRetryAt.isSmallerOrEqualValue(currentTime)))
-          ..orderBy([
-            (t) => OrderingTerm(expression: t.createdAt, mode: OrderingMode.asc)
-          ]))
-        .get();
+    final query = select(localRequestEntries)
+      ..where((t) =>
+          t.tenantId.equals(tenantId) &
+          t.userId.equals(userId) &
+          t.syncStatus.equals('pending_sync') &
+          (t.nextRetryAt.isNull() |
+              t.nextRetryAt.isSmallerOrEqualValue(currentTime)))
+      ..orderBy([
+        (t) => OrderingTerm(expression: t.createdAt, mode: OrderingMode.asc)
+      ]);
+    if (dynamicOnly == true) {
+      query.where((t) => t.requestType.like('dynamic:%'));
+    } else if (dynamicOnly == false) {
+      query.where((t) => t.requestType.like('dynamic:%').not());
+    }
+    if (limit != null) query.limit(limit);
+    return query.get();
   }
 
   Future<List<LocalRequestRow>> getAllRequests({
@@ -566,9 +602,18 @@ class AppDriftDatabase extends _$AppDriftDatabase
         latitude: row.latitude,
         longitude: row.longitude,
         accuracyMeters: row.accuracyMeters,
+        timestamp: row.locationCapturedAt,
       ),
       shiftInstanceId: row.shiftInstanceId,
       deviceId: row.deviceId,
+      captureProof: row.proofInstallationId == null ||
+              row.proofDigest == null ||
+              row.proofSignature == null
+          ? null
+          : OfflineAttendanceProof(
+              installationId: row.proofInstallationId!,
+              digest: row.proofDigest!,
+              signature: row.proofSignature!),
       status: AttendanceValidationStatusX.fromApiValue(row.syncStatus),
       reasonCode: row.reasonCode,
     );

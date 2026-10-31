@@ -1,5 +1,7 @@
 import 'package:bloc/bloc.dart';
 import 'package:attend_mobile/core/errors/app_failure.dart';
+import 'package:attend_mobile/core/network/background_sync_coordinator.dart';
+import 'package:attend_mobile/features/auth/domain/auth_models.dart';
 import 'package:attend_mobile/features/auth/domain/auth_repository.dart';
 import 'package:attend_mobile/core/trust/trust_ports.dart';
 import 'auth_state.dart';
@@ -7,11 +9,25 @@ import 'auth_state.dart';
 class AuthCubit extends Cubit<AuthState> {
   final AuthRepository _authRepository;
   final InstallationIdentityPort? _installationIdentity;
+  final BackgroundSyncSessionLifecycle? _backgroundSyncCoordinator;
 
   AuthCubit(this._authRepository,
-      {InstallationIdentityPort? installationIdentity})
+      {InstallationIdentityPort? installationIdentity,
+      BackgroundSyncSessionLifecycle? backgroundSyncCoordinator})
       : _installationIdentity = installationIdentity,
+        _backgroundSyncCoordinator = backgroundSyncCoordinator,
         super(const AuthInitial());
+
+  Future<void> _scheduleBackgroundSync(AuthSessionEntity session) async {
+    final coordinator = _backgroundSyncCoordinator;
+    if (coordinator == null) return;
+    try {
+      await coordinator.onSessionAuthenticated(
+        tenantId: session.tenantId,
+        userId: session.userId,
+      );
+    } catch (_) {}
+  }
 
   Future<void> checkSession() async {
     if (isClosed) return;
@@ -26,6 +42,7 @@ class AuthCubit extends Cubit<AuthState> {
             final refreshed = await _authRepository.refreshSession();
             if (isClosed) return;
             emit(Authenticated(refreshed));
+            await _scheduleBackgroundSync(refreshed);
             return;
           } catch (e) {
             final failure = AppFailureMapper.fromGeneric(e);
@@ -40,6 +57,7 @@ class AuthCubit extends Cubit<AuthState> {
           }
         }
         emit(Authenticated(session));
+        await _scheduleBackgroundSync(session);
       } else {
         emit(const Unauthenticated());
       }
@@ -76,6 +94,7 @@ class AuthCubit extends Cubit<AuthState> {
       );
       if (isClosed) return;
       emit(Authenticated(session));
+      await _scheduleBackgroundSync(session);
     } catch (e) {
       if (isClosed) return;
       emit(AuthError(AppFailureMapper.fromGeneric(e).message));
@@ -85,6 +104,18 @@ class AuthCubit extends Cubit<AuthState> {
   Future<void> logout() async {
     if (isClosed) return;
     emit(const AuthLoading());
+    AuthSessionEntity? currentSession;
+    try {
+      currentSession = await _authRepository.getCachedSession();
+    } catch (_) {}
+    if (currentSession != null) {
+      try {
+        await _backgroundSyncCoordinator?.onSessionRevoked(
+          tenantId: currentSession.tenantId,
+          userId: currentSession.userId,
+        );
+      } catch (_) {}
+    }
     try {
       await _authRepository.logout();
     } catch (_) {}

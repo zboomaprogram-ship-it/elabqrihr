@@ -80,6 +80,21 @@ void main() {
     expect(evidence.platformAssertion, 'opaque-integrity-token');
   });
 
+  test('signs captured facts offline without requesting an integrity token',
+      () async {
+    final calls = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call.method);
+      if (call.method == 'signAttendanceDigest') return 'capture-signature';
+      fail('Unexpected network/provider request ${call.method}');
+    });
+    final signature =
+        await AndroidAttendanceTrustBridge().signCaptureDigest('b' * 64);
+    expect(signature, 'capture-signature');
+    expect(calls, ['signAttendanceDigest']);
+  });
+
   test('does not expose Android provider diagnostics to the caller', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {

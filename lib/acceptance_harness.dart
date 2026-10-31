@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 import 'package:attend_mobile/core/api/api_client.dart';
@@ -8,12 +9,23 @@ import 'package:attend_mobile/core/api/generated/contract_types.dart';
 import 'package:attend_mobile/core/auth/token_storage.dart';
 import 'package:attend_mobile/core/database/drift_attendance_database.dart';
 import 'package:attend_mobile/core/location/location_service.dart';
+import 'package:attend_mobile/core/network/headless_background_sync.dart'
+    show attendBackgroundSyncEntrypoint;
+import 'package:attend_mobile/core/trust/trust_ports.dart';
+import 'package:attend_mobile/features/attendance/data/android_attendance_trust_bridge.dart';
+import 'package:attend_mobile/features/attendance/data/attendance_evidence_service.dart';
 import 'package:attend_mobile/features/attendance/data/attendance_repository_impl.dart';
 import 'package:attend_mobile/features/attendance/domain/attendance_models.dart';
 import 'package:attend_mobile/features/auth/domain/auth_models.dart';
 import 'package:attend_mobile/features/requests/data/request_repository_impl.dart';
 import 'package:attend_mobile/features/requests/domain/request_models.dart';
 import 'package:attend_mobile/features/dynamic_requests/data/dynamic_request_repository_impl.dart';
+
+// Keep the real worker entrypoint in this alternate QA target's AOT snapshot.
+// WorkManager starts it by name in a separate FlutterEngine process.
+@pragma('vm:entry-point')
+Future<void> _retainHeadlessBackgroundSyncEntrypoint() =>
+    attendBackgroundSyncEntrypoint();
 
 class _FixedUuid extends Uuid {
   final List<String> _ids;
@@ -33,7 +45,8 @@ class _OfflineDynamicRequestApiClient extends ApiClient {
       {required super.baseUrl, required super.tokenStorage});
 
   @override
-  Future<Map<String, dynamic>> createDynamicRequest(dynamic payload) async {
+  Future<Map<String, dynamic>> createDynamicRequest(dynamic payload,
+      {String? expectedTenantId, String? expectedUserId}) async {
     throw const SocketException(
         'Network unreachable for offline dynamic request acceptance Phase 1');
   }
@@ -44,8 +57,11 @@ class _FixedLocationService implements LocationService {
 
   @override
   Future<GeoPoint> getCurrentLocation() async {
-    return const GeoPoint(
-        latitude: 30.0444, longitude: 31.2357, accuracyMeters: 5.0);
+    return GeoPoint(
+        latitude: 30.0444,
+        longitude: 31.2357,
+        accuracyMeters: 5.0,
+        timestamp: DateTime.now().toUtc().subtract(const Duration(seconds: 5)));
   }
 }
 
@@ -54,7 +70,11 @@ class _OfflineRequestApiClient extends ApiClient {
       {required super.baseUrl, required super.tokenStorage});
 
   @override
-  Future<RequestDto> submitRequest(Map<String, dynamic> requestPayload) async {
+  Future<RequestDto> submitRequest(
+    Map<String, dynamic> requestPayload, {
+    String? expectedTenantId,
+    String? expectedUserId,
+  }) async {
     throw const SocketException(
         'Network unreachable for offline request acceptance Phase 1');
   }
@@ -71,6 +91,8 @@ class _OfflineApiClient extends ApiClient {
     required GeoPoint location,
     required DateTime capturedAt,
     AttendanceEvidenceDto? evidence,
+    String? expectedTenantId,
+    String? expectedUserId,
   }) async {
     throw const SocketException(
         'Network unreachable for offline acceptance Phase 1');
@@ -87,6 +109,46 @@ class _OfflineApiClient extends ApiClient {
       branchLocation: const GeoPoint(latitude: 30.0444, longitude: 31.2357),
       allowedRadiusMeters: 150.0,
       isCheckedIn: false,
+    );
+  }
+}
+
+class _OfflineChallengeClient extends ApiClient {
+  _OfflineChallengeClient(
+      {required super.baseUrl, required super.tokenStorage});
+
+  @override
+  Future<IntegrityChallengeDto> createAttendanceIntegrityChallenge({
+    required String eventId,
+    required String installationId,
+    required String contentDigest,
+  }) async =>
+      throw const SocketException('Synthetic offline challenge');
+}
+
+// The capture and replay signatures use the actual Android Keystore bridge.
+// Only the provider assertion is synthetic: a QA package cannot provide a
+// production Play Integrity verdict for the store application.
+class _SyntheticProviderAttestation
+    implements DeviceAttestationPort, OfflineCaptureSigningPort {
+  final AndroidAttendanceTrustBridge bridge;
+  _SyntheticProviderAttestation(this.bridge);
+
+  @override
+  Future<String> signCaptureDigest(String digest) =>
+      bridge.signCaptureDigest(digest);
+
+  @override
+  Future<IntegrityEvidence> signCanonicalEnvelope({
+    required String canonicalEnvelope,
+    required String challenge,
+  }) async {
+    final identity = await bridge.ensureInstallation();
+    return IntegrityEvidence(
+      installationId: identity.id,
+      signature: await bridge.signCaptureDigest(canonicalEnvelope),
+      platformAssertion: 'synthetic-provider-token',
+      keyVersion: identity.keyVersion,
     );
   }
 }
@@ -148,6 +210,17 @@ void main() async {
   }
 
   const serverPort = '8088';
+  const proofMode = bool.fromEnvironment('ATTEND_PROOF_HARNESS');
+  const qaMode = bool.fromEnvironment('ATTEND_QA_SANDBOX');
+  const backgroundWorkerReplay =
+      bool.fromEnvironment('ATTEND_BACKGROUND_WORKER_REPLAY');
+  if (proofMode && !qaMode) {
+    throw StateError('Proof harness requires QA sandbox');
+  }
+  if (backgroundWorkerReplay && (!proofMode || !qaMode)) {
+    throw StateError(
+        'Background worker proof requires isolated signed QA mode');
+  }
 
   try {
     if (phase == '1') {
@@ -165,19 +238,45 @@ void main() async {
       ));
 
       final outbox = await AppDriftDatabase.open();
-      final offlineClient = _OfflineApiClient(
-        baseUrl: 'http://$host:$serverPort/api/v1',
-        tokenStorage: tokenStorage,
-      );
+      final offlineClient = proofMode
+          ? _OfflineChallengeClient(
+              baseUrl: 'http://$host:$serverPort/api/v1',
+              tokenStorage: tokenStorage,
+            )
+          : _OfflineApiClient(
+              baseUrl: 'http://$host:$serverPort/api/v1',
+              tokenStorage: tokenStorage,
+            );
 
+      final bridge = AndroidAttendanceTrustBridge();
+      ProtectedInstallation? identity;
+      AttendanceEvidenceService? evidenceService;
+      if (proofMode) {
+        identity = await bridge.ensureInstallation();
+        await tokenStorage.saveDeviceInstallationRegistration(
+          tenantId: 'tenant-restart-acceptance',
+          userId: 'user-restart-001',
+          installationId: 'synthetic-server-installation',
+        );
+        evidenceService = AttendanceEvidenceService(
+          apiClient: offlineClient,
+          tokenStorage: tokenStorage,
+          installationIdentity: bridge,
+          deviceAttestation: _SyntheticProviderAttestation(bridge),
+        );
+      }
       final repo = AttendanceRepositoryImpl(
         apiClient: offlineClient,
         outbox: outbox,
         tokenStorage: tokenStorage,
-        locationService: const _FixedLocationService(),
+        locationService: proofMode && !backgroundWorkerReplay
+            ? GeolocatorLocationService()
+            : const _FixedLocationService(),
+        evidenceService: evidenceService,
       );
 
-      const eventId = 'journey-restart-evt-001';
+      final eventId =
+          proofMode ? 'journey-proof-evt-001' : 'journey-restart-evt-001';
       final result = await repo.submitAttendanceEvent(
         eventType: AttendanceEventType.checkIn,
         shiftInstanceId: 'shift-restart-001',
@@ -198,8 +297,31 @@ void main() async {
         throw StateError('Phase 1 failed: Event $eventId missing from outbox');
       }
 
+      final locationTime = result.location.timestamp;
+      if (locationTime == null) {
+        throw StateError('Location time was not captured');
+      }
+      if (proofMode) {
+        final proof = result.captureProof;
+        if (proof == null || identity == null) {
+          throw StateError('Capture proof missing');
+        }
+        await _writeMarker(markerDir, 'proof_result.txt',
+            '${identity.publicKey}:${proof.digest}:${proof.signature}');
+      }
+      if (backgroundWorkerReplay) {
+        await const MethodChannel(
+          'com.zbooma.elabqrihr/background_sync',
+        ).invokeMethod<bool>('enqueueOnceForQa', {
+          'tenantId': 'tenant-restart-acceptance',
+          'userId': 'user-restart-001',
+          // Leave time for Phase 1's activity to exit before JobScheduler
+          // makes the QA replay eligible on slower first-boot emulators.
+          'initialDelaySeconds': 60,
+        });
+      }
       await _writeMarker(markerDir, 'phase1_result.txt',
-          'PHASE_1_SUCCESS:PID=$pid:EVENT=$eventId\n');
+          'PHASE_1_SUCCESS:PID=$pid:EVENT=$eventId:LOCATION_MS=${locationTime.millisecondsSinceEpoch}\n');
       print('[ACCEPTANCE_HARNESS] Phase 1 completed successfully in PID $pid');
 
       await outbox.close();
@@ -213,59 +335,75 @@ void main() async {
       }
 
       final outbox = await AppDriftDatabase.open();
-      const eventId = 'journey-restart-evt-001';
+      final eventId =
+          proofMode ? 'journey-proof-evt-001' : 'journey-restart-evt-001';
 
-      final pendingBeforeSync = await outbox
-          .watchPendingEvents(
+      if (!backgroundWorkerReplay) {
+        final pendingBeforeSync = await outbox
+            .watchPendingEvents(
+              tenantId: 'tenant-restart-acceptance',
+              userId: 'user-restart-001',
+            )
+            .first;
+        if (!pendingBeforeSync.any((e) => e.id == eventId)) {
+          throw StateError(
+              'Phase 2 failed: Event did not survive process restart in Drift DB');
+        }
+
+        final liveClient = ApiClient(
+          baseUrl: 'http://$host:$serverPort/api/v1',
+          tokenStorage: tokenStorage,
+        );
+
+        final bridge = AndroidAttendanceTrustBridge();
+        final repo = AttendanceRepositoryImpl(
+          apiClient: liveClient,
+          outbox: outbox,
+          tokenStorage: tokenStorage,
+          locationService: const _FixedLocationService(),
+          evidenceService: proofMode
+              ? AttendanceEvidenceService(
+                  apiClient: liveClient,
+                  tokenStorage: tokenStorage,
+                  installationIdentity: bridge,
+                  deviceAttestation: _SyntheticProviderAttestation(bridge),
+                )
+              : null,
+        );
+
+        final pendingEntry = await outbox.getEntry(
             tenantId: 'tenant-restart-acceptance',
             userId: 'user-restart-001',
-          )
-          .first;
-      if (!pendingBeforeSync.any((e) => e.id == eventId)) {
-        throw StateError(
-            'Phase 2 failed: Event did not survive process restart in Drift DB');
-      }
-
-      final liveClient = ApiClient(
-        baseUrl: 'http://$host:$serverPort/api/v1',
-        tokenStorage: tokenStorage,
-      );
-
-      final repo = AttendanceRepositoryImpl(
-        apiClient: liveClient,
-        outbox: outbox,
-        tokenStorage: tokenStorage,
-        locationService: const _FixedLocationService(),
-      );
-
-      final pendingEntry = await outbox.getEntry(
-          tenantId: 'tenant-restart-acceptance',
-          userId: 'user-restart-001',
-          eventId: eventId);
-      final retryAt = pendingEntry?.nextRetryAt;
-      if (retryAt != null) {
-        final remaining = retryAt.toUtc().difference(DateTime.now().toUtc());
-        if (remaining > Duration.zero) {
-          await Future<void>.delayed(
-              remaining + const Duration(milliseconds: 100));
+            eventId: eventId);
+        final retryAt = pendingEntry?.nextRetryAt;
+        if (retryAt != null) {
+          final remaining = retryAt.toUtc().difference(DateTime.now().toUtc());
+          if (remaining > Duration.zero) {
+            await Future<void>.delayed(
+                remaining + const Duration(milliseconds: 100));
+          }
         }
+        await repo.synchronizeOutbox();
+        await repo.synchronizeOutbox();
+        liveClient.dio.close(force: true);
       }
-      await repo.synchronizeOutbox();
-      await repo.synchronizeOutbox();
 
       final pendingAfterSync = await outbox.getPendingEvents(
         tenantId: 'tenant-restart-acceptance',
         userId: 'user-restart-001',
       );
       if (pendingAfterSync.isNotEmpty) {
-        throw StateError('Phase 2 failed: Pending events remaining after sync');
+        throw StateError(
+          backgroundWorkerReplay
+              ? 'Phase 2 failed: Background worker left pending attendance events'
+              : 'Phase 2 failed: Pending events remaining after sync',
+        );
       }
 
       final entry = await outbox.getEntry(
-        tenantId: 'tenant-restart-acceptance',
-        userId: 'user-restart-001',
-        eventId: eventId,
-      );
+          tenantId: 'tenant-restart-acceptance',
+          userId: 'user-restart-001',
+          eventId: eventId);
       if (entry == null || entry.syncStatus != 'accepted') {
         throw StateError(
             'Phase 2 failed: Entry not terminal accepted (syncStatus=${entry?.syncStatus})');

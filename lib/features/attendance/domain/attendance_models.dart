@@ -122,6 +122,17 @@ class GeoPoint extends Equatable {
       [latitude, longitude, accuracyMeters, timestamp, isMocked];
 }
 
+class OfflineAttendanceProof {
+  const OfflineAttendanceProof(
+      {required this.installationId,
+      required this.digest,
+      required this.signature});
+
+  final String installationId;
+  final String digest;
+  final String signature;
+}
+
 class AttendanceEventEntity extends Equatable {
   final String id;
   final AttendanceEventType eventType;
@@ -131,6 +142,7 @@ class AttendanceEventEntity extends Equatable {
   final String? deviceId;
   final AttendanceValidationStatus status;
   final String? reasonCode;
+  final OfflineAttendanceProof? captureProof;
 
   const AttendanceEventEntity({
     required this.id,
@@ -141,6 +153,7 @@ class AttendanceEventEntity extends Equatable {
     this.deviceId,
     required this.status,
     this.reasonCode,
+    this.captureProof,
   });
 
   AttendanceEventEntity copyWith({
@@ -152,6 +165,7 @@ class AttendanceEventEntity extends Equatable {
     String? deviceId,
     AttendanceValidationStatus? status,
     String? reasonCode,
+    OfflineAttendanceProof? captureProof,
   }) {
     return AttendanceEventEntity(
       id: id ?? this.id,
@@ -162,6 +176,7 @@ class AttendanceEventEntity extends Equatable {
       deviceId: deviceId ?? this.deviceId,
       status: status ?? this.status,
       reasonCode: reasonCode ?? this.reasonCode,
+      captureProof: captureProof ?? this.captureProof,
     );
   }
 
@@ -175,6 +190,7 @@ class AttendanceEventEntity extends Equatable {
         deviceId,
         status,
         reasonCode,
+        captureProof,
       ];
 }
 

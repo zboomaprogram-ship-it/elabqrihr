@@ -3,10 +3,7 @@ package com.zbooma.elabqrihr
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.work.Constraints
-import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
@@ -16,7 +13,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.concurrent.TimeUnit
 
 /**
  * Task T055: Android network-recovery background sync instrumentation test.
@@ -45,20 +41,7 @@ class BackgroundSyncTest {
         val workManager = WorkManager.getInstance(context)
         val workName = BackgroundSyncPlugin.workName(testTenantId, testUserId)
 
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-
-        val syncRequest = OneTimeWorkRequestBuilder<BackgroundSyncWorker>()
-            .setConstraints(constraints)
-            .setInitialDelay(15, TimeUnit.SECONDS)
-            .build()
-
-        workManager.enqueueUniqueWork(
-            workName,
-            ExistingWorkPolicy.KEEP,
-            syncRequest
-        ).result.get()
+        BackgroundSyncPlugin.enqueueForIdentity(context, testTenantId, testUserId)
 
         val workInfos = workManager.getWorkInfosForUniqueWork(workName).get()
         assertNotNull("Work infos must not be null", workInfos)
@@ -71,6 +54,10 @@ class BackgroundSyncTest {
             workInfo.state == WorkInfo.State.BLOCKED ||
             workInfo.state == WorkInfo.State.RUNNING
         )
+        assertEquals(NetworkType.CONNECTED, workInfo.constraints.requiredNetworkType)
+        val scopedInput = BackgroundSyncPlugin.inputDataForIdentity(testTenantId, testUserId)
+        assertEquals(testTenantId, scopedInput.getString(BackgroundSyncWorker.TENANT_ID_KEY))
+        assertEquals(testUserId, scopedInput.getString(BackgroundSyncWorker.USER_ID_KEY))
     }
 
     @Test
@@ -78,16 +65,8 @@ class BackgroundSyncTest {
         val workManager = WorkManager.getInstance(context)
         val workName = BackgroundSyncPlugin.workName(testTenantId, testUserId)
 
-        val syncRequest1 = OneTimeWorkRequestBuilder<BackgroundSyncWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-
-        val syncRequest2 = OneTimeWorkRequestBuilder<BackgroundSyncWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-
-        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, syncRequest1).result.get()
-        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, syncRequest2).result.get()
+        BackgroundSyncPlugin.enqueueForIdentity(context, testTenantId, testUserId)
+        BackgroundSyncPlugin.enqueueForIdentity(context, testTenantId, testUserId)
 
         val workInfos = workManager.getWorkInfosForUniqueWork(workName).get()
         assertEquals("KEEP policy must prevent duplicate concurrent work tasks", 1, workInfos.size)
@@ -98,17 +77,53 @@ class BackgroundSyncTest {
         val workManager = WorkManager.getInstance(context)
         val workName = BackgroundSyncPlugin.workName(testTenantId, testUserId)
 
-        val syncRequest = OneTimeWorkRequestBuilder<BackgroundSyncWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-
-        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, syncRequest).result.get()
-        workManager.cancelUniqueWork(workName).result.get()
+        BackgroundSyncPlugin.enqueueForIdentity(context, testTenantId, testUserId)
+        BackgroundSyncPlugin.cancelForIdentity(context, testTenantId, testUserId)
 
         val workInfos = workManager.getWorkInfosForUniqueWork(workName).get()
         assertTrue(
             "Cancelled work must transition to CANCELLED or be purged",
             workInfos.isEmpty() || workInfos.first().state == WorkInfo.State.CANCELLED
+        )
+    }
+
+    @Test
+    fun qaReplayWorkIsOneShotNetworkConstrainedAndIdentityScoped() {
+        assertTrue(
+            "The test-only replay entrypoint requires the isolated QA package",
+            context.packageName == "com.zbooma.elabqrihr.qa",
+        )
+        val workName = BackgroundSyncPlugin.qaReplayWorkName(
+            testTenantId,
+            testUserId,
+        )
+
+        BackgroundSyncPlugin.enqueueOnceForQa(
+            context,
+            testTenantId,
+            testUserId,
+            initialDelaySeconds = 15,
+        )
+
+        val workInfos = WorkManager.getInstance(context)
+            .getWorkInfosForUniqueWork(workName).get()
+        assertEquals(1, workInfos.size)
+        assertEquals(WorkInfo.State.ENQUEUED, workInfos.single().state)
+        assertEquals(
+            NetworkType.CONNECTED,
+            workInfos.single().constraints.requiredNetworkType,
+        )
+        val scopedInput = BackgroundSyncPlugin.inputDataForIdentity(
+            testTenantId,
+            testUserId,
+        )
+        assertEquals(
+            testTenantId,
+            scopedInput.getString(BackgroundSyncWorker.TENANT_ID_KEY),
+        )
+        assertEquals(
+            testUserId,
+            scopedInput.getString(BackgroundSyncWorker.USER_ID_KEY),
         )
     }
 }

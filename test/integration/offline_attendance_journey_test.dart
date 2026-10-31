@@ -13,6 +13,7 @@ class MockOfflineApiClient extends ApiClient {
   bool isOnline = false;
   int serverSubmissionCount = 0;
   final List<String> receivedEventIds = [];
+  DateTime? receivedLocationTimestamp;
 
   MockOfflineApiClient({required super.baseUrl, required super.tokenStorage});
 
@@ -38,6 +39,8 @@ class MockOfflineApiClient extends ApiClient {
     required GeoPoint location,
     required DateTime capturedAt,
     AttendanceEvidenceDto? evidence,
+    String? expectedTenantId,
+    String? expectedUserId,
   }) async {
     if (!isOnline) {
       throw const SocketException('Network is unreachable (offline)');
@@ -45,6 +48,7 @@ class MockOfflineApiClient extends ApiClient {
 
     serverSubmissionCount++;
     receivedEventIds.add(eventId);
+    receivedLocationTimestamp = location.timestamp;
 
     return AttendanceEventEntity(
       id: eventId,
@@ -126,8 +130,11 @@ void main() {
       final offlineResult = await repoInstance1.submitAttendanceEvent(
         eventType: AttendanceEventType.checkIn,
         shiftInstanceId: 'shift-acceptance-001',
-        location: const GeoPoint(
-            latitude: 30.0444, longitude: 31.2357, accuracyMeters: 10.0),
+        location: GeoPoint(
+            latitude: 30.0444,
+            longitude: 31.2357,
+            accuracyMeters: 10.0,
+            timestamp: DateTime.now().toUtc()),
         clientEventId: eventId,
       );
 
@@ -144,6 +151,7 @@ void main() {
         eventId: eventId,
       );
       expect(savedBeforeRestart?.syncStatus, equals('pending_sync'));
+      final originalLocationTime = offlineResult.location.timestamp;
 
       // 2. SIMULATE PROCESS KILL & RESTART (close connections & recreate instances)
       await outboxInstance1.close();
@@ -178,6 +186,8 @@ void main() {
       // 4. RESTORE CONNECTIVITY and Synchronize
       apiClient.isOnline = true;
       await repoInstance2.synchronizeOutbox();
+      expect(
+          apiClient.receivedLocationTimestamp?.toUtc(), originalLocationTime);
 
       // 5. Assert terminal result
       expect(apiClient.serverSubmissionCount, equals(1));

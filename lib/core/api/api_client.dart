@@ -5,6 +5,10 @@ import 'package:attend_mobile/core/api/generated/contract_types.dart';
 import 'package:attend_mobile/features/attendance/domain/attendance_models.dart';
 import 'package:attend_mobile/features/auth/domain/auth_models.dart';
 
+class SessionIdentityChangedException implements Exception {
+  const SessionIdentityChangedException();
+}
+
 class ApiException implements Exception {
   final int statusCode;
   final String message;
@@ -187,7 +191,20 @@ class ApiClient {
 
           if (!isUnauthenticatedAuthRoute) {
             final session = await _tokenStorage.getSession();
+            final expectedTenant = options.extra['_authTenantId'];
+            final expectedUser = options.extra['_authUserId'];
+            if (expectedTenant != null &&
+                (session == null ||
+                    session.tenantId != expectedTenant ||
+                    session.userId != expectedUser)) {
+              return handler.reject(DioException(
+                requestOptions: options,
+                error: const SessionIdentityChangedException(),
+              ));
+            }
             if (session != null && session.accessToken.isNotEmpty) {
+              options.extra['_authTenantId'] ??= session.tenantId;
+              options.extra['_authUserId'] ??= session.userId;
               options.headers['Authorization'] =
                   'Bearer ${session.accessToken}';
             }
@@ -223,6 +240,19 @@ class ApiClient {
                 error.requestOptions.extra['authRetry'] == true;
             if (statusCode == 401 && !isAuthRoute && !alreadyRetried) {
               final session = await _tokenStorage.getSession();
+              final expectedTenant =
+                  error.requestOptions.extra['_authTenantId'];
+              final expectedUser = error.requestOptions.extra['_authUserId'];
+              if (expectedTenant != null &&
+                  (session == null ||
+                      session.tenantId != expectedTenant ||
+                      session.userId != expectedUser)) {
+                return handler.reject(DioException(
+                  requestOptions: error.requestOptions,
+                  response: response,
+                  error: const SessionIdentityChangedException(),
+                ));
+              }
               if (session != null &&
                   session.refreshToken != null &&
                   session.refreshToken!.isNotEmpty) {
@@ -484,7 +514,10 @@ class ApiClient {
     required GeoPoint location,
     required DateTime capturedAt,
     AttendanceEvidenceDto? evidence,
+    String? expectedTenantId,
+    String? expectedUserId,
   }) async {
+    final options = _identityBoundOptions(expectedTenantId, expectedUserId);
     try {
       final response = await _dio.post(
         '/attendance/events',
@@ -497,10 +530,12 @@ class ApiClient {
             'latitude': location.latitude,
             'longitude': location.longitude,
             'accuracyMeters': location.accuracyMeters ?? 10.0,
-            'capturedAt': capturedAt.toUtc().toIso8601String(),
+            'capturedAt':
+                (location.timestamp ?? capturedAt).toUtc().toIso8601String(),
           },
           if (evidence != null) 'evidence': evidence.toJson(),
         },
+        options: options,
       );
 
       final data = response.data as Map<String, dynamic>;
@@ -517,6 +552,9 @@ class ApiClient {
       );
     } on DioException catch (e) {
       if (e.error is ApiException) throw e.error as ApiException;
+      if (e.error is SessionIdentityChangedException) {
+        throw e.error as SessionIdentityChangedException;
+      }
       rethrow;
     }
   }
@@ -691,17 +729,37 @@ class ApiClient {
   // Request Operations (Feature 002: T020-T025, T034-T036)
   // ---------------------------------------------------------------------------
 
-  Future<RequestDto> submitRequest(Map<String, dynamic> requestPayload) async {
+  Future<RequestDto> submitRequest(
+    Map<String, dynamic> requestPayload, {
+    String? expectedTenantId,
+    String? expectedUserId,
+  }) async {
+    final options = _identityBoundOptions(expectedTenantId, expectedUserId);
     try {
       final response = await _dio.post(
         '/requests',
         data: requestPayload,
+        options: options,
       );
       return RequestDto.fromJson(response.data as Map<String, dynamic>);
     } on DioException catch (e) {
       if (e.error is ApiException) throw e.error as ApiException;
+      if (e.error is SessionIdentityChangedException) {
+        throw e.error as SessionIdentityChangedException;
+      }
       rethrow;
     }
+  }
+
+  Options? _identityBoundOptions(String? tenantId, String? userId) {
+    if ((tenantId == null) != (userId == null)) {
+      throw ArgumentError('Expected tenant and user must be supplied together');
+    }
+    if (tenantId == null) return null;
+    return Options(extra: {
+      '_authTenantId': tenantId,
+      '_authUserId': userId,
+    });
   }
 
   Future<RequestPageDto> getMyRequests({
@@ -868,7 +926,12 @@ class ApiClient {
   // Dynamic Request Operations (Feature 004: US5)
   // ---------------------------------------------------------------------------
 
-  Future<Map<String, dynamic>> createDynamicRequest(dynamic payload) async {
+  Future<Map<String, dynamic>> createDynamicRequest(
+    dynamic payload, {
+    String? expectedTenantId,
+    String? expectedUserId,
+  }) async {
+    final options = _identityBoundOptions(expectedTenantId, expectedUserId);
     try {
       final data = payload is CreateDynamicRequest
           ? payload.toJson()
@@ -876,10 +939,14 @@ class ApiClient {
       final response = await _dio.post(
         '/dynamic-requests',
         data: data,
+        options: options,
       );
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
       if (e.error is ApiException) throw e.error as ApiException;
+      if (e.error is SessionIdentityChangedException) {
+        throw e.error as SessionIdentityChangedException;
+      }
       rethrow;
     }
   }

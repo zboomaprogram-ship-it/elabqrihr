@@ -3,6 +3,28 @@ import UIKit
 import UserNotifications
 import BackgroundTasks
 
+// Multiple Flutter plugins can respond to the same system notification.
+final class NotificationCompletionGate {
+    private let lock = NSLock()
+    private var completion: (() -> Void)?
+
+    init(_ completion: @escaping () -> Void) {
+        self.completion = completion
+    }
+
+    func finish() {
+        lock.lock()
+        let callback = completion
+        completion = nil
+        lock.unlock()
+        callback?()
+    }
+
+    func finishIfPluginsDoNotRespond() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self.finish() }
+    }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate {
     private static let backgroundSyncChannelName = "com.zbooma.elabqrihr/background_sync"
@@ -101,11 +123,15 @@ import BackgroundTasks
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        if #available(iOS 14.0, *) {
-            completionHandler([.banner, .badge, .sound])
-        } else {
-            completionHandler([.alert, .badge, .sound])
+        let gate = NotificationCompletionGate {
+            if #available(iOS 14.0, *) {
+                completionHandler([.banner, .badge, .sound])
+            } else {
+                completionHandler([.alert, .badge, .sound])
+            }
         }
+        gate.finishIfPluginsDoNotRespond()
+        super.userNotificationCenter(center, willPresent: notification) { _ in gate.finish() }
     }
 
     override func userNotificationCenter(
@@ -113,7 +139,9 @@ import BackgroundTasks
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        completionHandler()
+        let gate = NotificationCompletionGate(completionHandler)
+        gate.finishIfPluginsDoNotRespond()
+        super.userNotificationCenter(center, didReceive: response) { gate.finish() }
     }
 
     override func application(

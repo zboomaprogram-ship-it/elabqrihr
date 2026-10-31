@@ -4,9 +4,23 @@ import 'package:flutter/services.dart';
 import 'package:attend_mobile/core/trust/trust_ports.dart';
 import 'package:attend_mobile/features/attendance/domain/attendance_repository.dart';
 import 'package:attend_mobile/features/requests/domain/request_repository.dart';
+import 'package:attend_mobile/features/dynamic_requests/domain/dynamic_request_repository.dart';
+
+abstract interface class BackgroundSyncSessionLifecycle {
+  Future<void> onSessionAuthenticated({
+    required String tenantId,
+    required String userId,
+  });
+
+  Future<void> onSessionRevoked({
+    required String tenantId,
+    required String userId,
+  });
+}
 
 /// Method channel bridge to native WorkManager scheduler on Android.
-final class WorkManagerBackgroundSyncScheduler implements BackgroundSyncScheduler {
+final class WorkManagerBackgroundSyncScheduler
+    implements BackgroundSyncScheduler {
   static const _channel = MethodChannel('com.zbooma.elabqrihr/background_sync');
 
   @override
@@ -51,17 +65,21 @@ final class WorkManagerBackgroundSyncScheduler implements BackgroundSyncSchedule
 /// 1. Processes bounded due rows without altering cryptographic evidence, capture times, or client IDs.
 /// 2. Never captures background GPS coordinates or generates automated background check-ins.
 /// 3. Idempotent: safe to run concurrently or sequentially.
-final class BackgroundSyncCoordinator {
+final class BackgroundSyncCoordinator
+    implements BackgroundSyncSessionLifecycle {
   BackgroundSyncCoordinator({
     required AttendanceRepository attendanceRepository,
     required RequestRepository requestRepository,
+    required DynamicRequestRepository dynamicRequestRepository,
     BackgroundSyncScheduler? scheduler,
   })  : _attendanceRepository = attendanceRepository,
         _requestRepository = requestRepository,
+        _dynamicRequestRepository = dynamicRequestRepository,
         _scheduler = scheduler ?? WorkManagerBackgroundSyncScheduler();
 
   final AttendanceRepository _attendanceRepository;
   final RequestRepository _requestRepository;
+  final DynamicRequestRepository _dynamicRequestRepository;
   final BackgroundSyncScheduler _scheduler;
 
   bool _isSyncing = false;
@@ -76,12 +94,16 @@ final class BackgroundSyncCoordinator {
 
       // 2. Synchronize eligible offline requests
       await _requestRepository.synchronizeOutbox();
+
+      // 3. Dynamic requests use their own synchronization lane.
+      await _dynamicRequestRepository.synchronizeOutbox();
     } finally {
       _isSyncing = false;
     }
   }
 
   /// Registers background WorkManager task for the authenticated session.
+  @override
   Future<void> onSessionAuthenticated({
     required String tenantId,
     required String userId,
@@ -93,6 +115,7 @@ final class BackgroundSyncCoordinator {
   }
 
   /// Cancels background WorkManager task upon user logout.
+  @override
   Future<void> onSessionRevoked({
     required String tenantId,
     required String userId,

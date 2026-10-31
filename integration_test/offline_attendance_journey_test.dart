@@ -23,6 +23,7 @@ class MockOfflineApiClient extends ApiClient {
   bool isOnline = false;
   int serverSubmissionCount = 0;
   final List<String> receivedEventIds = [];
+  DateTime? receivedLocationTime;
 
   MockOfflineApiClient({required super.baseUrl, required super.tokenStorage});
 
@@ -56,6 +57,8 @@ class MockOfflineApiClient extends ApiClient {
     required GeoPoint location,
     required DateTime capturedAt,
     AttendanceEvidenceDto? evidence,
+    String? expectedTenantId,
+    String? expectedUserId,
   }) async {
     if (!isOnline) {
       throw const SocketException('Network is unreachable (offline)');
@@ -63,6 +66,7 @@ class MockOfflineApiClient extends ApiClient {
 
     serverSubmissionCount++;
     receivedEventIds.add(eventId);
+    receivedLocationTime = location.timestamp;
 
     return AttendanceEventEntity(
       id: eventId,
@@ -173,8 +177,12 @@ void main() {
       final offlineResult = await attendanceRepo1.submitAttendanceEvent(
         eventType: AttendanceEventType.checkIn,
         shiftInstanceId: 'shift-acceptance-001',
-        location: const GeoPoint(
-            latitude: 30.0444, longitude: 31.2357, accuracyMeters: 10.0),
+        location: GeoPoint(
+            latitude: 30.0444,
+            longitude: 31.2357,
+            accuracyMeters: 10.0,
+            timestamp:
+                DateTime.now().toUtc().subtract(const Duration(seconds: 5))),
         clientEventId: eventId,
       );
 
@@ -218,6 +226,8 @@ void main() {
           .first;
       expect(pendingAfterRestart.length, equals(1));
       expect(pendingAfterRestart.first.id, equals(eventId));
+      expect(pendingAfterRestart.first.location.timestamp?.toUtc(),
+          offlineResult.location.timestamp);
       final savedAfter = await outbox2.getEntry(
           tenantId: 'tenant-alpha', userId: 'user-001', eventId: eventId);
       expect(savedAfter?.nextRetryAt, savedBefore?.nextRetryAt);
@@ -263,6 +273,8 @@ void main() {
       // -------------------------------------------------------------
       expect(apiClient.serverSubmissionCount, equals(1));
       expect(apiClient.receivedEventIds.first, equals(eventId));
+      expect(apiClient.receivedLocationTime?.toUtc(),
+          offlineResult.location.timestamp);
 
       // Outbox no longer has pending sync items
       final pendingAfterSync = await outbox2

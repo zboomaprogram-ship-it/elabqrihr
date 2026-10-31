@@ -1,4 +1,5 @@
 import 'package:test/test.dart';
+import 'package:attend_mobile/core/network/background_sync_coordinator.dart';
 import 'package:attend_mobile/features/auth/domain/auth_models.dart';
 import 'package:attend_mobile/features/auth/domain/auth_repository.dart';
 import 'package:attend_mobile/features/auth/presentation/cubit/auth_cubit.dart';
@@ -54,14 +55,40 @@ class FakeAuthRepository implements AuthRepository {
       throw UnimplementedError();
 }
 
+class FakeBackgroundSyncLifecycle implements BackgroundSyncSessionLifecycle {
+  final scheduled = <(String, String)>[];
+  final revoked = <(String, String)>[];
+
+  @override
+  Future<void> onSessionAuthenticated({
+    required String tenantId,
+    required String userId,
+  }) async {
+    scheduled.add((tenantId, userId));
+  }
+
+  @override
+  Future<void> onSessionRevoked({
+    required String tenantId,
+    required String userId,
+  }) async {
+    revoked.add((tenantId, userId));
+  }
+}
+
 void main() {
   group('AuthCubit', () {
     late FakeAuthRepository authRepository;
+    late FakeBackgroundSyncLifecycle backgroundSync;
     late AuthCubit authCubit;
 
     setUp(() {
       authRepository = FakeAuthRepository();
-      authCubit = AuthCubit(authRepository);
+      backgroundSync = FakeBackgroundSyncLifecycle();
+      authCubit = AuthCubit(
+        authRepository,
+        backgroundSyncCoordinator: backgroundSync,
+      );
     });
 
     tearDown(() {
@@ -99,6 +126,7 @@ void main() {
       );
       expect((authCubit.state as Authenticated).session.displayName,
           equals('أحمد محمود'));
+      expect(backgroundSync.scheduled, [('tenant-1', 'user-1')]);
     });
 
     test('login failure emits AuthError', () async {
@@ -126,6 +154,21 @@ void main() {
 
       await authCubit.logout();
       expect(authCubit.state, isA<Unauthenticated>());
+      expect(backgroundSync.revoked, [('tenant-1', 'user-1')]);
+    });
+
+    test('session restore reschedules background work for cached identity',
+        () async {
+      await authCubit.login(
+        email: 'employee@attend.app',
+        password: 'secret',
+        tenantSlug: 'alpha',
+      );
+      backgroundSync.scheduled.clear();
+
+      await authCubit.checkSession();
+
+      expect(backgroundSync.scheduled, [('tenant-1', 'user-1')]);
     });
   });
 }

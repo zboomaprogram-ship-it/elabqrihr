@@ -6,9 +6,32 @@ import 'package:attend_mobile/core/trust/trust_ports.dart';
 /// Integrity. Widgets receive only safe failures; private keys and raw Android
 /// provider diagnostics never cross this boundary.
 final class AndroidAttendanceTrustBridge
-    implements InstallationIdentityPort, DeviceAttestationPort {
+    implements
+        InstallationIdentityPort,
+        DeviceAttestationPort,
+        OfflineCaptureSigningPort {
   static const _channel =
       MethodChannel('com.zbooma.elabqrihr/attendance_trust');
+
+  @override
+  Future<String> signCaptureDigest(String digest) async {
+    _requireAndroid();
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(digest)) {
+      throw const AttendanceTrustUnavailableException();
+    }
+    try {
+      final signature = await _channel.invokeMethod<String>(
+        'signAttendanceDigest',
+        {'contentDigest': digest},
+      );
+      if (signature == null || signature.isEmpty) {
+        throw const AttendanceTrustUnavailableException();
+      }
+      return signature;
+    } on PlatformException {
+      throw const AttendanceTrustUnavailableException();
+    }
+  }
 
   @override
   Future<ProtectedInstallation> ensureInstallation() async {

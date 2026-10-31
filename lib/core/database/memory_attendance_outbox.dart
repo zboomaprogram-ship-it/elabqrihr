@@ -40,12 +40,17 @@ class MemoryAttendanceOutbox implements LocalAttendanceOutbox {
   Future<List<AttendanceEventEntity>> getPendingEvents({
     required String tenantId,
     required String userId,
+    int? limit,
   }) async {
+    if (limit != null && limit <= 0) {
+      throw ArgumentError.value(limit, 'limit', 'must be greater than zero');
+    }
     final key = _key(tenantId, userId);
     final list = _storage[key] ?? [];
     return list
         .where((r) => r.syncStatus == AttendanceValidationStatus.pendingSync)
         .map((r) => r.toDomain())
+        .take(limit ?? 0x7fffffff)
         .toList();
   }
 

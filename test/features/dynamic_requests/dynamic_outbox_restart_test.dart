@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:attend_mobile/core/api/api_client.dart';
@@ -22,7 +23,8 @@ class MockDynamicSyncApiClient extends ApiClient {
   });
 
   @override
-  Future<Map<String, dynamic>> createDynamicRequest(dynamic payload) async {
+  Future<Map<String, dynamic>> createDynamicRequest(dynamic payload,
+      {String? expectedTenantId, String? expectedUserId}) async {
     if (!isOnline) {
       throw const SocketException('Network unreachable');
     }
@@ -69,6 +71,59 @@ class EphemeralTokenStorage extends TokenStorage {
 
   @override
   Future<void> clearSession() async => session = null;
+}
+
+class SwitchingTokenStorage extends EphemeralTokenStorage {
+  int? switchOnRead;
+  AuthSessionEntity? replacement;
+  @override
+  Future<AuthSessionEntity?> getSession() async {
+    if (switchOnRead != null) {
+      switchOnRead = switchOnRead! - 1;
+      if (switchOnRead == 0) {
+        session = replacement;
+        switchOnRead = null;
+      }
+    }
+    return session;
+  }
+}
+
+class CountingAdapter implements HttpClientAdapter {
+  int calls = 0;
+  @override
+  void close({bool force = false}) {}
+  @override
+  Future<ResponseBody> fetch(RequestOptions options,
+      Stream<List<int>>? requestStream, Future<void>? cancelFuture) async {
+    calls++;
+    return ResponseBody.fromString('{}', 200, headers: {
+      Headers.contentTypeHeader: ['application/json']
+    });
+  }
+}
+
+class SwitchAfterSelectionDatabase extends AppDriftDatabase {
+  SwitchAfterSelectionDatabase(super.executor);
+  Future<void> Function()? afterSelection;
+
+  @override
+  Future<List<LocalRequestRow>> getPendingRequests({
+    required String tenantId,
+    required String userId,
+    DateTime? now,
+    int? limit,
+    bool? dynamicOnly,
+  }) async {
+    final rows = await super.getPendingRequests(
+        tenantId: tenantId,
+        userId: userId,
+        now: now,
+        limit: limit,
+        dynamicOnly: dynamicOnly);
+    await afterSelection?.call();
+    return rows;
+  }
 }
 
 void main() {
@@ -205,6 +260,73 @@ void main() {
       expect(pendingAfterSync.isEmpty, isTrue);
 
       await db2.close();
+    });
+
+    test('identity switch after selection does not send or change old rows',
+        () async {
+      final db = SwitchAfterSelectionDatabase(NativeDatabase(dbFile));
+      final repo = DynamicRequestRepositoryImpl(
+          apiClient: apiClient, database: db, tokenStorage: tokenStorage);
+      final queued = await repo.submitDynamicRequest(
+        typeKey: 'office_supply',
+        typeNameAr: 'طلب مستلزمات المكتب',
+        definitionVersionId: 'ver-supply-1',
+        values: {'item': 'paper'},
+      );
+      apiClient.isOnline = true;
+      db.afterSelection = () => tokenStorage.clearSession();
+      await repo.synchronizeOutbox();
+      expect(apiClient.serverCallCount, 0);
+      final row = await db.getRequestEntry(
+          tenantId: testSession.tenantId,
+          userId: testSession.userId,
+          requestId: queued.id);
+      expect(row?.syncStatus, 'pending_sync');
+      await db.close();
+    });
+
+    test('identity switch at authorization never sends a queued request',
+        () async {
+      final storage = SwitchingTokenStorage()..session = testSession;
+      final db = AppDriftDatabase(NativeDatabase(dbFile));
+      final offlineApi = MockDynamicSyncApiClient(
+          baseUrl: 'http://127.0.0.1:8080/api/v1', tokenStorage: storage);
+      final offlineRepo = DynamicRequestRepositoryImpl(
+          apiClient: offlineApi, database: db, tokenStorage: storage);
+      final queued = await offlineRepo.submitDynamicRequest(
+        typeKey: 'office_supply',
+        typeNameAr: 'طلب مستلزمات المكتب',
+        definitionVersionId: 'ver-supply-1',
+        values: {'item': 'paper'},
+      );
+      const replacement = AuthSessionEntity(
+        accessToken: 'other-token',
+        tenantId: 'tenant-restart-dyn',
+        userId: 'other-user',
+        role: UserRole.employee,
+        email: 'other@example.invalid',
+        displayName: 'Other',
+      );
+      final adapter = CountingAdapter();
+      final dio = Dio(BaseOptions(baseUrl: 'http://127.0.0.1:8080'))
+        ..httpClientAdapter = adapter;
+      final api = ApiClient(
+          baseUrl: 'http://127.0.0.1:8080/api/v1',
+          tokenStorage: storage,
+          dio: dio);
+      final repo = DynamicRequestRepositoryImpl(
+          apiClient: api, database: db, tokenStorage: storage);
+      storage.replacement = replacement;
+      storage.switchOnRead = 3;
+      await repo.synchronizeOutbox();
+      expect(adapter.calls, 0);
+      final row = await db.getRequestEntry(
+          tenantId: testSession.tenantId,
+          userId: testSession.userId,
+          requestId: queued.id);
+      expect(row?.syncStatus, 'pending_sync');
+      expect(row?.retryCount, 0);
+      await db.close();
     });
 
     test(

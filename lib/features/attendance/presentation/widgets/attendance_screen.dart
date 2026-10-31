@@ -183,12 +183,7 @@ class _AttendanceScreenBody extends StatelessWidget {
             if (state is AttendanceReady) {
               final shift = state.shiftContext;
               final isCheckedIn = shift.isCheckedIn;
-              final isCompleted = shift.isCompleted ||
-                  (shift.lastEvent != null &&
-                      shift.lastEvent!.status ==
-                          AttendanceValidationStatus.accepted &&
-                      shift.lastEvent!.eventType ==
-                          AttendanceEventType.checkOut);
+              final isCompleted = shift.isCompleted;
 
               return RefreshIndicator(
                 onRefresh: () =>
@@ -295,7 +290,8 @@ class _AttendanceScreenBody extends StatelessWidget {
 
                       // ── Terminal reason / rejection banner ──
                       if (shift.lastEvent != null &&
-                          shift.lastEvent!.reasonCode != null) ...[
+                          _shouldShowTerminalReasonBanner(
+                              shift.lastEvent!)) ...[
                         _buildTerminalReasonBanner(shift.lastEvent!),
                         const SizedBox(height: 12),
                         if (shift.lastEvent!.status ==
@@ -423,10 +419,7 @@ class _AttendanceScreenBody extends StatelessWidget {
     String text = AppStringsAr.statusNotStarted;
     Color color = Colors.grey;
 
-    final isCompleted = shift.isCompleted ||
-        (shift.lastEvent != null &&
-            shift.lastEvent!.status == AttendanceValidationStatus.accepted &&
-            shift.lastEvent!.eventType == AttendanceEventType.checkOut);
+    final isCompleted = shift.isCompleted;
 
     if (isCompleted) {
       text = AppStringsAr.statusCompleted;
@@ -475,6 +468,10 @@ class _AttendanceScreenBody extends StatelessWidget {
       ),
     );
   }
+
+  bool _shouldShowTerminalReasonBanner(AttendanceEventEntity event) =>
+      event.reasonCode != null &&
+      event.status != AttendanceValidationStatus.accepted;
 
   Widget _buildTerminalReasonBanner(AttendanceEventEntity event) {
     final isGeofence = _isGeofenceReason(event.reasonCode);

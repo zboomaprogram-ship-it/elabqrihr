@@ -68,10 +68,32 @@ class FakeAttendanceRepository implements AttendanceRepository {
 
   @override
   Future<void> synchronizeOutbox() async {}
+
+}
+
+class LocationCaptureAttendanceRepository extends FakeAttendanceRepository
+    implements HasCurrentLocationCapture {
+  int captureCalls = 0;
+
+  @override
+  Future<GeoPoint> captureCurrentLocation() async {
+    captureCalls++;
+    return const GeoPoint(latitude: 30.1, longitude: 31.1);
+  }
 }
 
 void main() {
   group('AttendanceCubit', () {
+    test('refresh delegates to the repository location capture once', () async {
+      final repo = LocationCaptureAttendanceRepository();
+      final cubit = AttendanceCubit(repo);
+      await cubit.loadShiftContext();
+      await cubit.refreshLocation();
+      expect(repo.captureCalls, 1);
+      expect((cubit.state as AttendanceReady).currentLocation?.latitude, 30.1);
+      await cubit.close();
+    });
+
     test('initial state is AttendanceInitial', () {
       final cubit = AttendanceCubit();
       expect(cubit.state, equals(const AttendanceInitial()));

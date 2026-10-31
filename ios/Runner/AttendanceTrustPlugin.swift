@@ -69,8 +69,11 @@ public class AttendanceTrustPlugin: NSObject, FlutterPlugin {
                 return
             }
 
-            let thumbprint = SHA256.hash(data: keyData).map { String(format: "%02x", $0) }.joined()
-            let spkiBase64 = keyData.base64EncodedString()
+            // Security exports a P-256 point in X9.63 form; the API contract
+            // and server fingerprint both require DER SubjectPublicKeyInfo.
+            let spki = try P256.Signing.PublicKey(x963Representation: keyData).derRepresentation
+            let thumbprint = SHA256.hash(data: spki).map { String(format: "%02x", $0) }.joined()
+            let spkiBase64 = spki.base64EncodedString()
             let installId = getOrCreateInstallationId()
 
             result([
@@ -95,7 +98,8 @@ public class AttendanceTrustPlugin: NSObject, FlutterPlugin {
             var error: Unmanaged<CFError>?
             guard let signature = SecKeyCreateSignature(
                 key,
-                .ecdsaSignatureDigestX962SHA256,
+                // The backend verifies SHA256 over the 32 digest bytes.
+                .ecdsaSignatureMessageX962SHA256,
                 digestData as CFData,
                 &error
             ) as Data? else {
@@ -159,12 +163,6 @@ public class AttendanceTrustPlugin: NSObject, FlutterPlugin {
             kSecReturnRef as String: true
         ]
 
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecSuccess, let existingKey = item {
-            return existingKey as! SecKey
-        }
-
         // Generate P-256 key pair in Keychain
         let attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
@@ -175,21 +173,38 @@ public class AttendanceTrustPlugin: NSObject, FlutterPlugin {
             ]
         ]
 
-        var genError: Unmanaged<CFError>?
-        if let newKey = SecKeyCreateRandomKey(attributes as CFDictionary, &genError) {
-            return newKey
-        }
+        return try Self.resolvePersistentKey(
+            lookup: {
+                var item: CFTypeRef?
+                let status = SecItemCopyMatching(query as CFDictionary, &item)
+                guard status == errSecSuccess else { return (status, nil) }
+                guard let item = item, CFGetTypeID(item) == SecKeyGetTypeID() else {
+                    return (errSecInternalComponent, nil)
+                }
+                return (status, (item as! SecKey))
+            },
+            create: {
+                var error: Unmanaged<CFError>?
+                guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
+                    throw error?.takeRetainedValue() ?? NSError(domain: "AttendanceTrust", code: -1)
+                }
+                return key
+            }
+        )
+    }
 
-        // On simulator or test hosts without Keychain entitlements (-34018), fallback to memory P-256
-        let fallbackAttributes: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeySizeInBits as String: 256
-        ]
-        var fallbackError: Unmanaged<CFError>?
-        guard let fallbackKey = SecKeyCreateRandomKey(fallbackAttributes as CFDictionary, &fallbackError) else {
-            throw genError?.takeRetainedValue() ?? NSError(domain: "AttendanceTrust", code: -1)
+    // Isolated so denied lookup and failed persistent creation can be tested
+    // without touching a real user's Keychain.
+    static func resolvePersistentKey(
+        lookup: () -> (OSStatus, SecKey?),
+        create: () throws -> SecKey
+    ) throws -> SecKey {
+        let (status, key) = lookup()
+        if status == errSecSuccess, let key = key { return key }
+        guard status == errSecItemNotFound else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
         }
-        return fallbackKey
+        return try create()
     }
 
     private func hexToData(hex: String) -> Data? {

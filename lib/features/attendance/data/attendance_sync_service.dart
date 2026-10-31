@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:attend_mobile/core/api/api_client.dart';
 import 'package:attend_mobile/features/attendance/data/attendance_failure_classifier.dart';
 import 'package:attend_mobile/features/attendance/domain/attendance_models.dart';
 import 'package:attend_mobile/features/attendance/domain/attendance_repository.dart';
@@ -29,15 +30,24 @@ class AttendanceSyncService {
   final AttendanceRepository _repository;
   final int maxRetries;
   final Duration backoffStep;
+  final Future<AttendanceEventEntity> Function(
+    AttendanceEventEntity, {
+    String? expectedTenantId,
+    String? expectedUserId,
+  })? submitEvent;
 
   AttendanceSyncService({
     required AttendanceRepository repository,
     this.maxRetries = 3,
     this.backoffStep = const Duration(seconds: 2),
+    this.submitEvent,
   }) : _repository = repository;
 
   Future<List<SyncResult>> syncBatch(
-      List<AttendanceEventEntity> pendingEvents) async {
+    List<AttendanceEventEntity> pendingEvents, {
+    String? expectedTenantId,
+    String? expectedUserId,
+  }) async {
     final results = <SyncResult>[];
 
     for (final event in pendingEvents) {
@@ -47,13 +57,19 @@ class AttendanceSyncService {
       while (attempt < maxRetries) {
         attempt++;
         try {
-          final outcomeEvent = await _repository.submitAttendanceEvent(
-            eventType: event.eventType,
-            shiftInstanceId: event.shiftInstanceId,
-            location: event.location,
-            clientEventId: event.id,
-            capturedAt: event.capturedAt,
-          );
+          final outcomeEvent = submitEvent != null
+              ? await submitEvent!(
+                  event,
+                  expectedTenantId: expectedTenantId,
+                  expectedUserId: expectedUserId,
+                )
+              : await _repository.submitAttendanceEvent(
+                  eventType: event.eventType,
+                  shiftInstanceId: event.shiftInstanceId,
+                  location: event.location,
+                  clientEventId: event.id,
+                  capturedAt: event.capturedAt,
+                );
 
           if (outcomeEvent.status == AttendanceValidationStatus.accepted) {
             result =
@@ -74,6 +90,7 @@ class AttendanceSyncService {
           }
           break; // Terminal outcome reached
         } catch (error) {
+          if (error is SessionIdentityChangedException) rethrow;
           final classification = AttendanceFailureClassifier.classify(error);
           if (classification.disposition ==
               AttendanceFailureDisposition.conflict) {

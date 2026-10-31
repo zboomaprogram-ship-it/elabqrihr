@@ -51,16 +51,22 @@ class GeolocatorLocationService implements LocationService {
       }
     }
 
-    // 1. Check cached position from OS first (instant, zero binder lock)
+    // Reuse only a recent, sufficiently accurate system fix.
     Position? cachedPosition;
     try {
-      cachedPosition = await Geolocator.getLastKnownPosition();
-      if (cachedPosition != null && cachedPosition.isMocked) {
+      // The platform plugin does not expose a timeLimit for its cached lookup.
+      // Bound it so a stalled Android location provider cannot leave the
+      // attendance refresh waiting indefinitely before fresh-fix fallbacks run.
+      cachedPosition = await Geolocator.getLastKnownPosition().timeout(
+        const Duration(seconds: 2),
+      );
+      if (cachedPosition != null &&
+          _isFresh(cachedPosition) &&
+          cachedPosition.isMocked) {
         throw const MockLocationDetectedException();
       }
-      // If we have a fresh cached position (within 3 minutes and <= 65m accuracy), use it immediately!
       if (cachedPosition != null &&
-          _isFresh(cachedPosition, maxAgeMinutes: 3) &&
+          _isFresh(cachedPosition) &&
           cachedPosition.accuracy <= 65) {
         return _toGeoPoint(cachedPosition);
       }
@@ -68,7 +74,7 @@ class GeolocatorLocationService implements LocationService {
       if (e is MockLocationDetectedException) rethrow;
     }
 
-    // 2. Request a fresh position fix with a tight 5-second timeout via FusedLocationProvider
+    // Request a current fix before trying lower accuracy.
     Position? position;
     try {
       final freshPos = await Geolocator.getCurrentPosition(
@@ -78,20 +84,12 @@ class GeolocatorLocationService implements LocationService {
         ),
       );
       if (freshPos.isMocked) throw const MockLocationDetectedException();
-      position = freshPos;
+      if (_isFresh(freshPos)) position = freshPos;
     } catch (e) {
       if (e is MockLocationDetectedException) rethrow;
     }
 
-    // 3. Fallback: If fresh position timed out or failed (indoors/no satellites),
-    // safely reuse the cached position if available within 15 minutes
-    if (position == null && cachedPosition != null) {
-      if (_isFresh(cachedPosition, maxAgeMinutes: 15)) {
-        position = cachedPosition;
-      }
-    }
-
-    // 4. Fallback 2: Fast medium accuracy (Cell/WiFi) with 4-second timeout
+    // Medium accuracy may succeed where the high-accuracy request cannot.
     if (position == null) {
       try {
         final mediumPos = await Geolocator.getCurrentPosition(
@@ -101,16 +99,9 @@ class GeolocatorLocationService implements LocationService {
           ),
         );
         if (mediumPos.isMocked) throw const MockLocationDetectedException();
-        position = mediumPos;
+        if (_isFresh(mediumPos)) position = mediumPos;
       } catch (e) {
         if (e is MockLocationDetectedException) rethrow;
-      }
-    }
-
-    // 5. Fallback 3: Any last known position up to 30 minutes
-    if (position == null && cachedPosition != null) {
-      if (_isFresh(cachedPosition, maxAgeMinutes: 30)) {
-        position = cachedPosition;
       }
     }
 
@@ -128,13 +119,13 @@ class GeolocatorLocationService implements LocationService {
       latitude: position.latitude,
       longitude: position.longitude,
       accuracyMeters: position.accuracy,
-      timestamp: DateTime.now().toUtc(),
+      timestamp: position.timestamp.toUtc(),
       isMocked: position.isMocked,
     );
   }
 
-  bool _isFresh(Position position, {int maxAgeMinutes = 1}) {
-    final age = DateTime.now().difference(position.timestamp).abs();
-    return age <= Duration(minutes: maxAgeMinutes);
+  bool _isFresh(Position position) {
+    final age = DateTime.now().difference(position.timestamp);
+    return age >= Duration.zero && age <= const Duration(seconds: 20);
   }
 }

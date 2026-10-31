@@ -54,6 +54,7 @@ abstract class LocalAttendanceOutbox {
   Future<List<AttendanceEventEntity>> getPendingEvents({
     required String tenantId,
     required String userId,
+    int? limit,
   });
 
   Stream<List<AttendanceEventEntity>> watchPendingEvents({

@@ -35,8 +35,16 @@ void main() {
         id: 'drift-evt-1',
         eventType: AttendanceEventType.checkIn,
         capturedAt: DateTime.utc(2026, 9, 20, 8, 0),
-        location: const GeoPoint(
-            latitude: 30.0444, longitude: 31.2357, accuracyMeters: 10.0),
+        location: GeoPoint(
+            latitude: 30.0444,
+            longitude: 31.2357,
+            accuracyMeters: 10.0,
+            timestamp: DateTime.utc(2026, 9, 20, 7, 59, 40)),
+        captureProof: const OfflineAttendanceProof(
+          installationId: 'installation-1',
+          digest: 'digest',
+          signature: 'signature',
+        ),
         shiftInstanceId: 'shift-100',
         status: AttendanceValidationStatus.pendingSync,
       );
@@ -55,6 +63,11 @@ void main() {
       expect(
           restored.first.capturedAt.toUtc(), DateTime.utc(2026, 9, 20, 8, 0));
       expect(restored.first.location.latitude, equals(30.0444));
+      expect(restored.first.location.timestamp?.toUtc(),
+          DateTime.utc(2026, 9, 20, 7, 59, 40));
+      expect(restored.first.captureProof?.signature, 'signature');
+      expect(restored.first.captureProof?.installationId, 'installation-1');
+      expect(restored.first.captureProof?.digest, 'digest');
       expect(restored.first.status,
           equals(AttendanceValidationStatus.pendingSync));
 
@@ -97,6 +110,42 @@ void main() {
           await db.getPendingEvents(tenantId: 'beta', userId: 'user-1');
       expect(foreignQuery, isEmpty);
 
+      await db.close();
+    });
+
+    test('pending outbox queries honor FIFO batch limits', () async {
+      final db = AppDriftDatabase(NativeDatabase.memory());
+      for (var i = 0; i < 3; i++) {
+        await db.saveEvent(
+          tenantId: 'alpha',
+          userId: 'user-1',
+          event: AttendanceEventEntity(
+            id: 'evt-$i',
+            eventType: AttendanceEventType.checkIn,
+            capturedAt: DateTime.utc(2026, 9, 20, 8 + i),
+            location: const GeoPoint(latitude: 30, longitude: 31),
+            shiftInstanceId: 'shift-1',
+            status: AttendanceValidationStatus.pendingSync,
+          ),
+        );
+        await db.saveRequest(
+          tenantId: 'alpha',
+          userId: 'user-1',
+          id: 'req-$i',
+          requestType: i == 2 ? 'dynamic:custom' : 'leave',
+          payloadJson: '{}',
+          createdAt: DateTime.utc(2026, 9, 20, 8 + i),
+        );
+      }
+      final events = await db.getPendingEvents(
+          tenantId: 'alpha', userId: 'user-1', limit: 2);
+      final requests = await db.getPendingRequests(
+          tenantId: 'alpha', userId: 'user-1', limit: 2, dynamicOnly: false);
+      final dynamicRequests = await db.getPendingRequests(
+          tenantId: 'alpha', userId: 'user-1', limit: 1, dynamicOnly: true);
+      expect(events.map((event) => event.id), ['evt-0', 'evt-1']);
+      expect(requests.map((row) => row.id), ['req-0', 'req-1']);
+      expect(dynamicRequests.map((row) => row.id), ['req-2']);
       await db.close();
     });
 
